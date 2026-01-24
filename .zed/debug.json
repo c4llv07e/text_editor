@@ -1,0 +1,13 @@
+[
+  {
+    "label": "Debug native binary",
+    "build": {
+      "command": "./build.sh",
+      "args": [],
+      "cwd": "$ZED_WORKTREE_ROOT",
+    },
+    "program": "$ZED_WORKTREE_ROOT/editor",
+    "request": "launch",
+    "adapter": "CodeLLDB",
+  },
+]
