@@ -1,5 +1,6 @@
 #include <SDL3/SDL.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -51,6 +52,12 @@ int main(int argc, char *argv[argc]) {
         SDL_Log("Error, can't init renderer: %s", SDL_GetError());
         return -1;
     }
+#ifdef DEBUG
+    const char *text = "int main(void) {\n    return 0;\n}";
+    insert_text(&ctx, text, strlen(text));
+    insert_text(&ctx, text, strlen(text));
+    ctx.cursor = strlen(text);
+#endif
     ctx.running = true;
     while (ctx.running) {
         SDL_Event ev;
@@ -83,6 +90,41 @@ int main(int argc, char *argv[argc]) {
                             char nl = '\t';
                             insert_text(&ctx, &nl, 1);
                         }; break;
+                        case SDL_SCANCODE_UP: {
+                            int row = 0;
+                            if (ctx.cursor > 0) {ctx.cursor--; row++; }
+                            while (ctx.text[ctx.cursor] != '\n' && ctx.cursor > 0) {
+                                ctx.cursor--;
+                                row++;
+                            }
+                            if (ctx.cursor == 0) break;
+                            ctx.cursor--;
+                            while (ctx.text[ctx.cursor] != '\n' && ctx.cursor > 0) {
+                                ctx.cursor--;
+                            }
+                            if (ctx.text[ctx.cursor] == '\n') ctx.cursor++;
+                            for (row--; row && ctx.text[ctx.cursor] != '\n'; row--) ctx.cursor++;
+                        }; break;
+                        case SDL_SCANCODE_DOWN: {
+                            int row = 0;
+                            if (ctx.cursor > 0) {ctx.cursor--; row++; }
+                            while (ctx.text[ctx.cursor] != '\n' && ctx.cursor > 0) {
+                                ctx.cursor--;
+                                row++;
+                            }
+                            if (ctx.cursor == 0) row++;
+                            ctx.cursor++;
+                            while (ctx.text[ctx.cursor] != '\n' && ctx.cursor < ctx.text_size) {
+                                ctx.cursor++;
+                            }
+                            if (ctx.cursor == ctx.text_size) break;
+                            ctx.cursor++;
+                            row--;
+                            while (row && ctx.cursor < ctx.text_size && ctx.text[ctx.cursor] != '\n') {
+                                ctx.cursor++;
+                                row--;
+                            }
+                        }; break;
                         default: {};
                     }
                 }; break;
@@ -98,6 +140,7 @@ int main(int argc, char *argv[argc]) {
         if (!ctx.running) break;
         SDL_SetRenderDrawColor(ctx.renderer, 0x12, 0x12, 0x12, 0xff);
         SDL_RenderClear(ctx.renderer);
+        int linebar_length = 2;
         if (ctx.text_size != 0) {
             SDL_SetRenderDrawColor(ctx.renderer, 0xe6, 0xe6, 0xe6, 0xff);
             const char *start = ctx.text;
@@ -111,7 +154,7 @@ int main(int argc, char *argv[argc]) {
                         if (len >= sizeof(tmp)) len = sizeof(tmp) - 1;
                         memcpy(tmp, start, len);
                         tmp[len] = '\0';
-                        SDL_RenderDebugText(ctx.renderer, 0, line * 12, tmp);
+                        SDL_RenderDebugText(ctx.renderer, 8 * (linebar_length + 1), line * 12, tmp);
                     }
                     start = end + 1;
                     line++;
@@ -124,6 +167,12 @@ int main(int argc, char *argv[argc]) {
                 if (len >= sizeof(tmp)) len = sizeof(tmp) - 1;
                 memcpy(tmp, start, len);
                 tmp[len] = '\0';
+                SDL_RenderDebugText(ctx.renderer, 8 * (linebar_length + 1), line * 12, tmp);
+            }
+            int max_lines = line;
+            for (int line = 0; line <= max_lines; ++line) {
+                char tmp[0x10];
+                sprintf(tmp, "%d", line + 1);
                 SDL_RenderDebugText(ctx.renderer, 0, line * 12, tmp);
             }
         }
@@ -143,7 +192,7 @@ int main(int argc, char *argv[argc]) {
             cursor_col = col;
         }
         SDL_SetRenderDrawColor(ctx.renderer, 0xe6, 0xe6, 0xe6, 0xff);
-        SDL_RenderRect(ctx.renderer, &(SDL_FRect){cursor_col * 8, cursor_line * 12, 2, 12});
+        SDL_RenderRect(ctx.renderer, &(SDL_FRect){8 * (linebar_length + 1 + cursor_col), cursor_line * 12, 2, 12});
         SDL_RenderPresent(ctx.renderer);
     }
 #ifdef DEBUG
