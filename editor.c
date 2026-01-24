@@ -16,6 +16,29 @@ typedef struct {
     bool running;
 } Ctx;
 
+static void insert_text(Ctx *ctx, const char *in, size_t in_len) {
+    if (in_len == 0) return;
+    if (ctx->cursor > ctx->text_size) ctx->cursor = ctx->text_size;
+    size_t new_size = (size_t)ctx->text_size + in_len;
+    if (new_size + 1 > ctx->text_capacity) {
+        size_t new_capacity = ((new_size + 1 + TEXT_CHUNK_SIZE - 1) / TEXT_CHUNK_SIZE) * TEXT_CHUNK_SIZE;
+        char *new_buf = realloc(ctx->text, new_capacity);
+        if (!new_buf) {
+            SDL_Log("Error, failed to reallocate new buffer");
+            return;
+        }
+        ctx->text = new_buf;
+        ctx->text_capacity = (Uint32)new_capacity;
+    }
+    memmove(ctx->text + ctx->cursor + in_len,
+        ctx->text + ctx->cursor,
+        (size_t)ctx->text_size - (size_t)ctx->cursor);
+    memcpy(ctx->text + ctx->cursor, in, in_len);
+    ctx->text_size = (Uint32)new_size;
+    ctx->cursor += (Uint32)in_len;
+    ctx->text[ctx->text_size] = '\0';
+}
+
 int main(int argc, char *argv[argc]) {
     (void)argv;
     Ctx ctx = {0};
@@ -53,52 +76,18 @@ int main(int argc, char *argv[argc]) {
                             }
                         }; break;
                         case SDL_SCANCODE_RETURN: {
-                            if (ctx.cursor > ctx.text_size) ctx.cursor = ctx.text_size;
-                            size_t new_size = (size_t)ctx.text_size + 1;
-                            if (new_size + 1 > ctx.text_capacity) {
-                                size_t new_capacity = ((new_size + 1 + TEXT_CHUNK_SIZE - 1) / TEXT_CHUNK_SIZE) * TEXT_CHUNK_SIZE;
-                                char *new_buf = realloc(ctx.text, new_capacity);
-                                if (!new_buf) {
-                                    SDL_Log("Error, failed to reallocate new buffer");
-                                    break;
-                                }
-                                ctx.text = new_buf;
-                                ctx.text_capacity = (Uint32)new_capacity;
-                            }
-                            memmove(ctx.text + ctx.cursor + 1,
-                                ctx.text + ctx.cursor,
-                                (size_t)ctx.text_size - (size_t)ctx.cursor);
-                            ctx.text[ctx.cursor] = '\n';
-                            ctx.text_size += 1;
-                            ctx.cursor += 1;
-                            ctx.text[ctx.text_size] = '\0';
+                            char nl = '\n';
+                            insert_text(&ctx, &nl, 1);
+                        }; break;
+                        case SDL_SCANCODE_TAB: {
+                            char nl = '\t';
+                            insert_text(&ctx, &nl, 1);
                         }; break;
                         default: {};
                     }
                 }; break;
                 case SDL_EVENT_TEXT_INPUT: {
-                    const char *in = ev.text.text;
-                    size_t in_len = strlen(in);
-                    if (in_len == 0) break;
-                    if (ctx.cursor > ctx.text_size) ctx.cursor = ctx.text_size;
-                    size_t new_size = (size_t)ctx.text_size + in_len;
-                    if (new_size + 1 > ctx.text_capacity) {
-                        size_t new_capacity = ((new_size + 1 + TEXT_CHUNK_SIZE - 1) / TEXT_CHUNK_SIZE) * TEXT_CHUNK_SIZE;
-                        char *new_buf = realloc(ctx.text, new_capacity);
-                        if (!new_buf) {
-                            SDL_Log("Error, failed to reallocate new buffer");
-                            break;
-                        }
-                        ctx.text = new_buf;
-                        ctx.text_capacity = (Uint32)new_capacity;
-                    }
-                    memmove(ctx.text + ctx.cursor + in_len,
-                        ctx.text + ctx.cursor,
-                        (size_t)ctx.text_size - (size_t)ctx.cursor);
-                    memcpy(ctx.text + ctx.cursor, in, in_len);
-                    ctx.text_size = (Uint32)new_size;
-                    ctx.cursor += (Uint32)in_len;
-                    ctx.text[ctx.text_size] = '\0';
+                    insert_text(&ctx, ev.text.text, strlen(ev.text.text));
                 }; break;
             }
         }
@@ -138,8 +127,23 @@ int main(int argc, char *argv[argc]) {
                 SDL_RenderDebugText(ctx.renderer, 0, line * 12, tmp);
             }
         }
+        int cursor_line = 0, cursor_col = 0;
+        if (ctx.text_size != 0) {
+            const char *p = ctx.text;
+            int line = 0, col = 0;
+            for (Uint32 i = 0; i < ctx.cursor && p[i]; ++i) {
+                if (p[i] == '\n') {
+                    line++;
+                    col = 0;
+                } else {
+                    col++;
+                }
+            }
+            cursor_line = line;
+            cursor_col = col;
+        }
         SDL_SetRenderDrawColor(ctx.renderer, 0xe6, 0xe6, 0xe6, 0xff);
-        SDL_RenderRect(ctx.renderer, &(SDL_FRect){ctx.cursor * 8, 0, 2, 8});
+        SDL_RenderRect(ctx.renderer, &(SDL_FRect){cursor_col * 8, cursor_line * 12, 2, 12});
         SDL_RenderPresent(ctx.renderer);
     }
 #ifdef DEBUG
