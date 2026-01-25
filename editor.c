@@ -21,6 +21,8 @@ typedef struct {
     bool moving_col; // When cursor was just moving up and down
 } Ctx;
 
+const static SDL_Color text_color = (SDL_Color){0xe6, 0xe6, 0xe6, 0xff};
+
 static void insert_text(Ctx *ctx, const char *in, size_t in_len) {
     if (in_len == 0) return;
     if (ctx->cursor > ctx->text_size) ctx->cursor = ctx->text_size;
@@ -59,7 +61,12 @@ static void render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t le
         }
     }
     tmp[out] = '\0';
+    SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
     SDL_RenderDebugText(ctx->renderer, frame.x, frame.y, tmp);
+#ifdef DEBUG_LAYOUT
+    SDL_SetRenderDrawColor(ctx->renderer, 0xff, 0x00, 0x00, 0xff);
+    SDL_RenderRect(ctx->renderer, &frame);
+#endif
 }
 
 static void render_text(Ctx *ctx, SDL_FRect frame, const char *text, size_t length) {
@@ -88,6 +95,7 @@ static void render_text(Ctx *ctx, SDL_FRect frame, const char *text, size_t leng
                     cur++;
                 }
             }
+            SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
             SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
                 .x = frame.x + col * 8,
                 .y = frame.y + line * 12,
@@ -99,6 +107,10 @@ static void render_text(Ctx *ctx, SDL_FRect frame, const char *text, size_t leng
         if (end - text >= length) break;
         line++;
     }
+#ifdef DEBUG_LAYOUT
+    SDL_SetRenderDrawColor(ctx->renderer, 0x00, 0xff, 0x00, 0xff);
+    SDL_RenderRect(ctx->renderer, &frame);
+#endif
 }
 
 int main(int argc, char *argv[argc]) {
