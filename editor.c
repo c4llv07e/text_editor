@@ -12,10 +12,13 @@ typedef struct {
     Uint32 cursor;
     Uint32 text_size;
     Uint32 text_capacity;
+    Uint32 last_row;
+    int win_w, win_h;
     char *text;
     int linebar_length;
     const bool *keys;
     bool running;
+    bool moving_col; // When cursor was just moving up and down
 } Ctx;
 
 static void insert_text(Ctx *ctx, const char *in, size_t in_len) {
@@ -43,7 +46,7 @@ static void insert_text(Ctx *ctx, const char *in, size_t in_len) {
 
 #define TAB_WIDTH 4
 
-static void render_line(Ctx *ctx, const char *buffer, size_t len, int line) {
+static void render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t len) {
     char tmp[1024];
     size_t out = 0;
     for (size_t i = 0; i < len && out < sizeof(tmp) - 1; ++i) {
@@ -56,7 +59,46 @@ static void render_line(Ctx *ctx, const char *buffer, size_t len, int line) {
         }
     }
     tmp[out] = '\0';
-    SDL_RenderDebugText(ctx->renderer, 8 * (ctx->linebar_length), line * 12, tmp);
+    SDL_RenderDebugText(ctx->renderer, frame.x, frame.y, tmp);
+}
+
+static void render_text(Ctx *ctx, SDL_FRect frame, const char *text, size_t length) {
+    int line = 0;
+    const char *start = text;
+    const char *end = start;
+    while (end - text <= length) {
+        while ((end - text < length) && *end != '\n') {
+            end++;
+        }
+        render_line(ctx, (SDL_FRect) {
+            .x = frame.x,
+            .y = frame.y + line * 12,
+            .w = frame.w,
+            .h = frame.h,
+        }, start, end - start);
+        if (ctx->cursor >= (start - ctx->text) && ctx->cursor <= (end - ctx->text)) {
+            int col = 0;
+            const char *cur = start;
+            while (ctx->cursor > (cur - ctx->text)) {
+                if (*cur == '\t') {
+                    col += TAB_WIDTH;
+                    cur++;
+                } else {
+                    col++;
+                    cur++;
+                }
+            }
+            SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
+                .x = frame.x + col * 8,
+                .y = frame.y + line * 12,
+                .w = 2,
+                .h = 12,
+            });
+        }
+        start = end = end + 1;
+        if (end - text >= length) break;
+        line++;
+    }
 }
 
 int main(int argc, char *argv[argc]) {
@@ -68,15 +110,25 @@ int main(int argc, char *argv[argc]) {
     ctx.text = NULL;
     ctx.keys = NULL;
     ctx.linebar_length = 3;
-    if (!SDL_CreateWindowAndRenderer("test", 0x400, 0x300, SDL_WINDOW_RESIZABLE, &ctx.window, &ctx.renderer)) {
+    Uint64 window_flags =  SDL_WINDOW_RESIZABLE;
+#ifdef DEBUG
+    window_flags |= SDL_WINDOW_UTILITY;
+#endif
+    if (!SDL_CreateWindowAndRenderer("test", 0x400, 0x300, window_flags, &ctx.window, &ctx.renderer)) {
         SDL_Log("Error, can't init renderer: %s", SDL_GetError());
         return -1;
     }
 #ifdef DEBUG
-    const char *text = "int main(void) {\n\treturn 0;\n}";
+    const char *text = "int main(void) {\n\treturn 0;\n}\n";
     insert_text(&ctx, text, strlen(text));
     insert_text(&ctx, text, strlen(text));
     ctx.cursor = strlen(text);
+    text = "aaaaaaa\n";
+    insert_text(&ctx, text, strlen(text));
+    text = "aa\n";
+    insert_text(&ctx, text, strlen(text));
+    text = "aaaaaaa\n";
+    insert_text(&ctx, text, strlen(text));
 #endif
     ctx.running = true;
     while (ctx.running) {
@@ -90,12 +142,15 @@ int main(int argc, char *argv[argc]) {
                 case SDL_EVENT_KEY_DOWN: {
                     switch (ev.key.scancode) {
                         case SDL_SCANCODE_LEFT: {
+                            ctx.moving_col = false;
                             if (ctx.cursor > 0) ctx.cursor -= 1;
                         }; break;
                         case SDL_SCANCODE_RIGHT: {
+                            ctx.moving_col = false;
                             if (ctx.cursor < ctx.text_size) ctx.cursor += 1;
                         }; break;
                         case SDL_SCANCODE_BACKSPACE: {
+                            ctx.moving_col = false;
                             if (ctx.cursor > 0 && ctx.text_size > 0) {
                                 memmove(ctx.text + ctx.cursor - 1, ctx.text + ctx.cursor, ctx.text_size - ctx.cursor + 1); // +1 to move the null terminator
                                 ctx.cursor -= 1;
@@ -103,46 +158,63 @@ int main(int argc, char *argv[argc]) {
                             }
                         }; break;
                         case SDL_SCANCODE_RETURN: {
+                            ctx.moving_col = false;
                             char nl = '\n';
                             insert_text(&ctx, &nl, 1);
                         }; break;
                         case SDL_SCANCODE_TAB: {
+                            ctx.moving_col = false;
                             char nl = '\t';
                             insert_text(&ctx, &nl, 1);
                         }; break;
                         case SDL_SCANCODE_UP: {
                             int row = 0;
-                            if (ctx.cursor > 0) {ctx.cursor--; row++; }
-                            while (ctx.text[ctx.cursor] != '\n' && ctx.cursor > 0) {
+                            if (ctx.cursor > 0) {
                                 ctx.cursor--;
-                                row++;
                             }
+                            while (ctx.text[ctx.cursor] != '\n' && ctx.cursor > 0) {
+                                if (ctx.text[ctx.cursor] == '\t') row += 4;
+                                else row++;
+                                ctx.cursor--;
+                            }
+                            if (ctx.moving_col) row = ctx.last_row;
+                            else ctx.last_row = row;
+                            ctx.moving_col = true;
                             if (ctx.cursor == 0) break;
                             ctx.cursor--;
                             while (ctx.text[ctx.cursor] != '\n' && ctx.cursor > 0) {
                                 ctx.cursor--;
                             }
                             if (ctx.text[ctx.cursor] == '\n') ctx.cursor++;
-                            for (row--; row && ctx.text[ctx.cursor] != '\n'; row--) ctx.cursor++;
+                            while (row > 0 && ctx.text[ctx.cursor] != '\n') {
+                                if (ctx.text[ctx.cursor] == '\t') row -= TAB_WIDTH;
+                                else row--;
+                                ctx.cursor++;
+                            }
                         }; break;
                         case SDL_SCANCODE_DOWN: {
                             int row = 0;
-                            if (ctx.cursor > 0) {ctx.cursor--; row++; }
-                            while (ctx.text[ctx.cursor] != '\n' && ctx.cursor > 0) {
+                            if (ctx.cursor > 0) {
                                 ctx.cursor--;
-                                row++;
                             }
-                            if (ctx.cursor == 0) row++;
+                            while (ctx.text[ctx.cursor] != '\n' && ctx.cursor > 0) {
+                                if (ctx.text[ctx.cursor] == '\t') row += 4;
+                                else row++;
+                                ctx.cursor--;
+                            }
+                            if (ctx.moving_col) row = ctx.last_row;
+                            else ctx.last_row = row;
+                            ctx.moving_col = true;
                             ctx.cursor++;
                             while (ctx.text[ctx.cursor] != '\n' && ctx.cursor < ctx.text_size) {
                                 ctx.cursor++;
                             }
                             if (ctx.cursor == ctx.text_size) break;
                             ctx.cursor++;
-                            row--;
-                            while (row && ctx.cursor < ctx.text_size && ctx.text[ctx.cursor] != '\n') {
+                            while (row > 0 && ctx.cursor < ctx.text_size && ctx.text[ctx.cursor] != '\n') {
+                                if (ctx.text[ctx.cursor] == '\t') row -= TAB_WIDTH;
+                                else row--;
                                 ctx.cursor++;
-                                row--;
                             }
                         }; break;
                         default: {};
@@ -151,6 +223,8 @@ int main(int argc, char *argv[argc]) {
                 case SDL_EVENT_MOUSE_BUTTON_DOWN: {
                     int row = (ev.button.x / 8.0) - ctx.linebar_length + 0.7;
                     int col = ev.button.y / 12;
+                    ctx.last_row = row;
+                    ctx.moving_col = true;
                     ctx.cursor = 0;
                     while (col > 0) {
                         if (ctx.cursor >= ctx.text_size) break;
@@ -171,6 +245,7 @@ int main(int argc, char *argv[argc]) {
                     }
                 }; break;
                 case SDL_EVENT_TEXT_INPUT: {
+                    ctx.moving_col = false;
                     insert_text(&ctx, ev.text.text, strlen(ev.text.text));
                 }; break;
             }
@@ -178,56 +253,19 @@ int main(int argc, char *argv[argc]) {
         if (!SDL_TextInputActive(ctx.window)) {
             SDL_StartTextInput(ctx.window);
         }
+        if (!SDL_GetWindowSize(ctx.window, &ctx.win_w, &ctx.win_h)) {
+            SDL_Log("Can't get window properties: %s", SDL_GetError());
+            // Maybe exiting right away isn't required, but I don't know what should happened so SDL couldn't get window size
+            ctx.running = false;
+        }
         ctx.keys = SDL_GetKeyboardState(NULL);
         if (!ctx.running) break;
         SDL_SetRenderDrawColor(ctx.renderer, 0x12, 0x12, 0x12, 0xff);
         SDL_RenderClear(ctx.renderer);
         SDL_SetRenderDrawColor(ctx.renderer, 0xe6, 0xe6, 0xe6, 0xff);
-        if (ctx.text_size != 0) {
-            const char *start = ctx.text;
-            const char *end = ctx.text;
-            int line = 0;
-            while (*end) {
-                if (*end == '\n') {
-                    size_t len = end - start;
-                    if (len > 0) {
-                        render_line(&ctx, start, len, line);
-                    }
-                    start = end + 1;
-                    line++;
-                }
-                end++;
-            }
-            size_t len = end - start;
-            if (start != end) {
-                render_line(&ctx, start, len, line);
-            }
-            int max_lines = line;
-            for (int line = 0; line <= max_lines; ++line) {
-                char tmp[0x10];
-                sprintf(tmp, "%d", line + 1);
-                SDL_RenderDebugText(ctx.renderer, 0, line * 12, tmp);
-            }
-        }
-        int cursor_line = 0, cursor_col = 0;
-        if (ctx.text_size != 0) {
-            const char *p = ctx.text;
-            int line = 0, col = 0;
-            for (Uint32 i = 0; i < ctx.cursor && p[i]; ++i) {
-                if (p[i] == '\n') {
-                    line++;
-                    col = 0;
-                } else if (p[i] == '\t') {
-                    col += TAB_WIDTH;
-                } else {
-                    col++;
-                }
-            }
-            cursor_line = line;
-            cursor_col = col;
-        }
-        SDL_SetRenderDrawColor(ctx.renderer, 0xe6, 0xe6, 0xe6, 0xff);
-        SDL_RenderRect(ctx.renderer, &(SDL_FRect){8 * (ctx.linebar_length + cursor_col), cursor_line * 12, 2, 12});
+        render_text(&ctx, (SDL_FRect) {
+            0, 0, ctx.win_w, ctx.win_h,
+        }, ctx.text, ctx.text_size);
         SDL_RenderPresent(ctx.renderer);
     }
 #ifdef DEBUG
