@@ -41,6 +41,24 @@ static void insert_text(Ctx *ctx, const char *in, size_t in_len) {
     ctx->text[ctx->text_size] = '\0';
 }
 
+#define TAB_WIDTH 4
+
+static void render_line(Ctx *ctx, const char *buffer, size_t len, int line) {
+    char tmp[1024];
+    size_t out = 0;
+    for (size_t i = 0; i < len && out < sizeof(tmp) - 1; ++i) {
+        if (buffer[i] == '\t') {
+            for (int s = 0; s < TAB_WIDTH && out < sizeof(tmp) - 1; ++s) {
+                tmp[out++] = ' ';
+            }
+        } else {
+            tmp[out++] = buffer[i];
+        }
+    }
+    tmp[out] = '\0';
+    SDL_RenderDebugText(ctx->renderer, 8 * (ctx->linebar_length), line * 12, tmp);
+}
+
 int main(int argc, char *argv[argc]) {
     (void)argv;
     Ctx ctx = {0};
@@ -55,7 +73,7 @@ int main(int argc, char *argv[argc]) {
         return -1;
     }
 #ifdef DEBUG
-    const char *text = "int main(void) {\n    return 0;\n}";
+    const char *text = "int main(void) {\n\treturn 0;\n}";
     insert_text(&ctx, text, strlen(text));
     insert_text(&ctx, text, strlen(text));
     ctx.cursor = strlen(text);
@@ -143,8 +161,13 @@ int main(int argc, char *argv[argc]) {
                     while (row > 0) {
                         if (ctx.cursor >= ctx.text_size) break;
                         if (ctx.text[ctx.cursor] == '\n') break;
-                        ctx.cursor++;
-                        row--;
+                        if (ctx.text[ctx.cursor] == '\t') {
+                            ctx.cursor++;
+                            row -= TAB_WIDTH;
+                        } else {
+                            ctx.cursor++;
+                            row--;
+                        }
                     }
                 }; break;
                 case SDL_EVENT_TEXT_INPUT: {
@@ -159,8 +182,8 @@ int main(int argc, char *argv[argc]) {
         if (!ctx.running) break;
         SDL_SetRenderDrawColor(ctx.renderer, 0x12, 0x12, 0x12, 0xff);
         SDL_RenderClear(ctx.renderer);
+        SDL_SetRenderDrawColor(ctx.renderer, 0xe6, 0xe6, 0xe6, 0xff);
         if (ctx.text_size != 0) {
-            SDL_SetRenderDrawColor(ctx.renderer, 0xe6, 0xe6, 0xe6, 0xff);
             const char *start = ctx.text;
             const char *end = ctx.text;
             int line = 0;
@@ -168,24 +191,16 @@ int main(int argc, char *argv[argc]) {
                 if (*end == '\n') {
                     size_t len = end - start;
                     if (len > 0) {
-                        char tmp[1024];
-                        if (len >= sizeof(tmp)) len = sizeof(tmp) - 1;
-                        memcpy(tmp, start, len);
-                        tmp[len] = '\0';
-                        SDL_RenderDebugText(ctx.renderer, 8 * (ctx.linebar_length), line * 12, tmp);
+                        render_line(&ctx, start, len, line);
                     }
                     start = end + 1;
                     line++;
                 }
                 end++;
             }
+            size_t len = end - start;
             if (start != end) {
-                size_t len = end - start;
-                char tmp[1024];
-                if (len >= sizeof(tmp)) len = sizeof(tmp) - 1;
-                memcpy(tmp, start, len);
-                tmp[len] = '\0';
-                SDL_RenderDebugText(ctx.renderer, 8 * (ctx.linebar_length), line * 12, tmp);
+                render_line(&ctx, start, len, line);
             }
             int max_lines = line;
             for (int line = 0; line <= max_lines; ++line) {
@@ -202,6 +217,8 @@ int main(int argc, char *argv[argc]) {
                 if (p[i] == '\n') {
                     line++;
                     col = 0;
+                } else if (p[i] == '\t') {
+                    col += TAB_WIDTH;
                 } else {
                     col++;
                 }
