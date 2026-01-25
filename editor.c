@@ -15,6 +15,8 @@ typedef struct {
     char *text;
     int linebar_length;
     const bool *keys;
+    const char *opened_file;
+    SDL_Keymod keymod;
     bool running;
 } Ctx;
 
@@ -68,6 +70,7 @@ int main(int argc, char *argv[argc]) {
     ctx.text = NULL;
     ctx.keys = NULL;
     ctx.linebar_length = 3;
+    ctx.opened_file = NULL;
     if (!SDL_CreateWindowAndRenderer("test", 0x400, 0x300, SDL_WINDOW_RESIZABLE, &ctx.window, &ctx.renderer)) {
         SDL_Log("Error, can't init renderer: %s", SDL_GetError());
         return -1;
@@ -145,6 +148,12 @@ int main(int argc, char *argv[argc]) {
                                 row--;
                             }
                         }; break;
+                        case SDL_SCANCODE_S: {
+                            if (!(ctx.keymod & SDL_KMOD_CTRL)) break;
+                        }; break;
+                        case SDL_SCANCODE_O: {
+                            if (!(ctx.keymod & SDL_KMOD_CTRL)) break;
+                        }; break;
                         default: {};
                     }
                 }; break;
@@ -171,6 +180,7 @@ int main(int argc, char *argv[argc]) {
                     }
                 }; break;
                 case SDL_EVENT_TEXT_INPUT: {
+                    if (ctx.keymod & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) break;
                     insert_text(&ctx, ev.text.text, strlen(ev.text.text));
                 }; break;
             }
@@ -179,6 +189,7 @@ int main(int argc, char *argv[argc]) {
             SDL_StartTextInput(ctx.window);
         }
         ctx.keys = SDL_GetKeyboardState(NULL);
+        ctx.keymod = SDL_GetModState();
         if (!ctx.running) break;
         SDL_SetRenderDrawColor(ctx.renderer, 0x12, 0x12, 0x12, 0xff);
         SDL_RenderClear(ctx.renderer);
