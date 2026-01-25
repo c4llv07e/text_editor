@@ -13,6 +13,7 @@ typedef struct {
     Uint32 text_size;
     Uint32 text_capacity;
     char *text;
+    int linebar_length;
     const bool *keys;
     bool running;
 } Ctx;
@@ -48,6 +49,7 @@ int main(int argc, char *argv[argc]) {
     ctx.text_capacity = 0;
     ctx.text = NULL;
     ctx.keys = NULL;
+    ctx.linebar_length = 3;
     if (!SDL_CreateWindowAndRenderer("test", 0x400, 0x300, SDL_WINDOW_RESIZABLE, &ctx.window, &ctx.renderer)) {
         SDL_Log("Error, can't init renderer: %s", SDL_GetError());
         return -1;
@@ -128,6 +130,23 @@ int main(int argc, char *argv[argc]) {
                         default: {};
                     }
                 }; break;
+                case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+                    int row = (ev.button.x / 8.0) - ctx.linebar_length + 0.7;
+                    int col = ev.button.y / 12;
+                    ctx.cursor = 0;
+                    while (col > 0) {
+                        if (ctx.cursor >= ctx.text_size) break;
+                        ctx.cursor++;
+                        if (ctx.text[ctx.cursor] == '\n') col--;
+                    }
+                    ctx.cursor++;
+                    while (row > 0) {
+                        if (ctx.cursor >= ctx.text_size) break;
+                        if (ctx.text[ctx.cursor] == '\n') break;
+                        ctx.cursor++;
+                        row--;
+                    }
+                }; break;
                 case SDL_EVENT_TEXT_INPUT: {
                     insert_text(&ctx, ev.text.text, strlen(ev.text.text));
                 }; break;
@@ -140,7 +159,6 @@ int main(int argc, char *argv[argc]) {
         if (!ctx.running) break;
         SDL_SetRenderDrawColor(ctx.renderer, 0x12, 0x12, 0x12, 0xff);
         SDL_RenderClear(ctx.renderer);
-        int linebar_length = 2;
         if (ctx.text_size != 0) {
             SDL_SetRenderDrawColor(ctx.renderer, 0xe6, 0xe6, 0xe6, 0xff);
             const char *start = ctx.text;
@@ -154,7 +172,7 @@ int main(int argc, char *argv[argc]) {
                         if (len >= sizeof(tmp)) len = sizeof(tmp) - 1;
                         memcpy(tmp, start, len);
                         tmp[len] = '\0';
-                        SDL_RenderDebugText(ctx.renderer, 8 * (linebar_length + 1), line * 12, tmp);
+                        SDL_RenderDebugText(ctx.renderer, 8 * (ctx.linebar_length), line * 12, tmp);
                     }
                     start = end + 1;
                     line++;
@@ -167,7 +185,7 @@ int main(int argc, char *argv[argc]) {
                 if (len >= sizeof(tmp)) len = sizeof(tmp) - 1;
                 memcpy(tmp, start, len);
                 tmp[len] = '\0';
-                SDL_RenderDebugText(ctx.renderer, 8 * (linebar_length + 1), line * 12, tmp);
+                SDL_RenderDebugText(ctx.renderer, 8 * (ctx.linebar_length), line * 12, tmp);
             }
             int max_lines = line;
             for (int line = 0; line <= max_lines; ++line) {
@@ -192,7 +210,7 @@ int main(int argc, char *argv[argc]) {
             cursor_col = col;
         }
         SDL_SetRenderDrawColor(ctx.renderer, 0xe6, 0xe6, 0xe6, 0xff);
-        SDL_RenderRect(ctx.renderer, &(SDL_FRect){8 * (linebar_length + 1 + cursor_col), cursor_line * 12, 2, 12});
+        SDL_RenderRect(ctx.renderer, &(SDL_FRect){8 * (ctx.linebar_length + cursor_col), cursor_line * 12, 2, 12});
         SDL_RenderPresent(ctx.renderer);
     }
 #ifdef DEBUG
