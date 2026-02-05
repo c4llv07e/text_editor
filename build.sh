@@ -8,4 +8,4 @@ SUPER_DEBUG_ARGS="-lasan -ggdb -fsanitize=pointer-compare \
 # DEBUG_ARGS="${DEBUG_ARGS} -DDEBUG_LAYOUT=ON"
 ARGS="-Wall -Wextra -pedantic -lSDL3 -Wno-missing-braces"
 ARGS="${DEBUG_ARGS} ${ARGS}"
-gcc ${ARGS} -o editor editor.c
+gcc -o editor editor.c ${ARGS}

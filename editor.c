@@ -7,6 +7,7 @@
 #define TEXT_CHUNK_SIZE 256
 
 typedef struct {
+	char *filename;
 	Uint32 text_size;
 	Uint32 text_capacity;
 	char *text;
@@ -198,12 +199,15 @@ int main(int argc, char *argv[argc]) {
 	ctx.linebar_length = 3;
 	ctx.opened_file = NULL;
 	Uint64 window_flags =  SDL_WINDOW_RESIZABLE;
-#ifdef DEBUG
+#if defined(DEBUG) && !defined(_WIN32)
 	window_flags |= SDL_WINDOW_UTILITY;
 #endif
-	if (!SDL_CreateWindowAndRenderer("test", 0x400, 0x300, window_flags, &ctx.window, &ctx.renderer)) {
+	if (!SDL_CreateWindowAndRenderer("test", 0x300, 0x200, window_flags, &ctx.window, &ctx.renderer)) {
 		SDL_Log("Error, can't init renderer: %s", SDL_GetError());
 		return -1;
+	}
+	if (!SDL_SetRenderVSync(ctx.renderer, 1)) {
+		SDL_Log("Warning, can't enable vsync: %s", SDL_GetError());
 	}
 #ifdef DEBUG
 	const char *text = "int main(void) {\n\treturn 0;\n}\n";
@@ -312,6 +316,7 @@ int main(int argc, char *argv[argc]) {
 						}; break;
 						case SDL_SCANCODE_O: {
 							if (!(ctx.keymod & SDL_KMOD_CTRL)) break;
+							if (ctx.input_focus == InputFocus_Ask) break;
 							ctx.input_focus = InputFocus_Ask;
 							ctx.ask_buffer_length = 0;
 						}; break;
@@ -364,8 +369,10 @@ int main(int argc, char *argv[argc]) {
 		SDL_SetRenderDrawColor(ctx.renderer, 0x12, 0x12, 0x12, 0xff);
 		SDL_RenderClear(ctx.renderer);
 		render_frame(&ctx, &ctx.frames[ctx.focused_frame]);
-		SDL_SetRenderDrawColor(ctx.renderer, 0x08, 0x08, 0x08, 0xff);
-		SDL_RenderRect(ctx.renderer, &(SDL_FRect){0, 100, ctx.win_w, 12});
+		if (ctx.input_focus == InputFocus_Ask) {
+			SDL_SetRenderDrawColor(ctx.renderer, 0x08, 0x08, 0x08, 0xff);
+			SDL_RenderRect(ctx.renderer, &(SDL_FRect){0, 100, ctx.win_w, 12});
+		}
 		SDL_RenderPresent(ctx.renderer);
 	}
 #ifdef DEBUG
