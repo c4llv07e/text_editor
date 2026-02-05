@@ -1,3 +1,14 @@
+/*
+	Each frame stores non-unique pointer for buffers.
+	Each buffer stores unique pointer for text. For each file there should be only one buffer.
+	There's a global list of frames inside ctx.
+	Althrough ctx stores dynamic array of frames, frames shouldn't be moved or resized into smaller size.
+		- TODO(c4llv07e): Think about frames "defragmentation procedure".
+	"Ask buffer" (aka emacs minibuffer) should be the frame too to work with keybings.
+	Frame type should work as a smaill and controllable polymorphism, i.e. cast the meaning of the buffer,
+		not the "class".
+*/
+
 #include <SDL3/SDL.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -6,26 +17,32 @@
 
 #define TEXT_CHUNK_SIZE 256
 
+#define CHAR_SIZE SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE
+#define LINE_HEIGHT ((int)(TEXT_SIZE * 1.5))
+
 typedef struct {
-	char *filename;
 	Uint32 text_size;
 	Uint32 text_capacity;
 	char *text;
 } TextBuffer;
 
+typedef enum {
+	Frame_Type_memory = 0, // The most safe one
+	Frame_Type_file,
+	Frame_Type_ask,
+	Frame_Type_length,
+} Frame_Type;
+
 typedef struct {
+	Uint32 is_deleted;
+	Frame_Type frame_type;
+	char *filename;
 	SDL_FRect bounds;
 	SDL_FPoint scroll;
 	// I want edit one files in multiple frames, so cursor is needed here
 	Uint32 cursor;
 	TextBuffer *buffer;
 } Frame;
-
-typedef enum {
-	InputFocus_Buffer = 0,
-	InputFocus_Ask,
-	InputFocus_length
-} InputFocus;
 
 #define ASK_BUFFER_SIZE 0x1000
 
@@ -44,9 +61,6 @@ typedef struct {
 	Uint32 frames_capacity;
 	Frame *frames;
 	Uint32 focused_frame;
-	InputFocus input_focus;
-	Uint32 ask_buffer_length;
-	char ask_buffer[ASK_BUFFER_SIZE];
 } Ctx;
 
 static const SDL_Color text_color = {0xe6, 0xe6, 0xe6, 0xff};
@@ -156,7 +170,7 @@ static TextBuffer *allocate_buffer(Ctx *ctx) {
 	return buffer;
 }
 
-static int append_frame(Ctx *ctx, TextBuffer *buffer, SDL_FRect bounds) {
+static Uint32 append_frame(Ctx *ctx, TextBuffer *buffer, SDL_FRect bounds) {
 	if (ctx->frames_capacity <= ctx->frames_count) {
 		size_t new_cap = ctx->frames_capacity * 2;
 		if (new_cap == 0) {
@@ -170,13 +184,28 @@ static int append_frame(Ctx *ctx, TextBuffer *buffer, SDL_FRect bounds) {
 		ctx->frames = new_frames;
 		ctx->frames_capacity = new_cap;
 	}
+	Uint32 frame_ind = ctx->frames_count++;
 	ctx->frames[ctx->frames_count++] = (Frame){
 		.cursor = 0,
 		.scroll = 0,
 		.bounds = bounds,
 		.buffer = buffer,
 	};
-	return 0;
+	return frame_ind;
+}
+
+static Uint32 create_ask_frame(Ctx *ctx) {
+	TextBuffer *buffer = allocate_buffer(&ctx);
+	if (buffer == NULL) {
+		SDL_Log("Error, can't allocate ask buffer");
+		return -1;
+	}
+	Uint32 frame = append_frame(ctx, buffer, (SDL_FRect){0, ctx->win_h - LINE_HEIGHT, ctx->win_w, LINE_HEIGHT});
+	if (frame == -1) {
+		SDL_Log("Error, can't append ask buffer");
+		return -1;
+	}
+	return frame;
 }
 
 int main(int argc, char *argv[argc]) {
@@ -187,11 +216,10 @@ int main(int argc, char *argv[argc]) {
 		SDL_Log("Error, can't allocate first buffer");
 		return -1;
 	}
-	if (append_frame(&ctx, buffer, (SDL_FRect){0, 0, 100, 100}) != 0) {
+	if (append_frame(&ctx, buffer, (SDL_FRect){0, 0, 100, 100}) == -1) {
 		SDL_Log("Error, can't create first frame");
 		return -1;
 	}
-
 	ctx.frames[0].buffer->text_size = 0;
 	ctx.frames[0].buffer->text_capacity = 0;
 	ctx.frames[0].buffer->text = NULL;
@@ -316,9 +344,7 @@ int main(int argc, char *argv[argc]) {
 						}; break;
 						case SDL_SCANCODE_O: {
 							if (!(ctx.keymod & SDL_KMOD_CTRL)) break;
-							if (ctx.input_focus == InputFocus_Ask) break;
-							ctx.input_focus = InputFocus_Ask;
-							ctx.ask_buffer_length = 0;
+							TODO
 						}; break;
 						default: {};
 					}
