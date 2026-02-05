@@ -12,13 +12,12 @@
 #include <SDL3/SDL.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #define TEXT_CHUNK_SIZE 256
 
 #define CHAR_SIZE SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE
-#define LINE_HEIGHT ((int)(TEXT_SIZE * 1.5))
+#define LINE_HEIGHT ((int)(CHAR_SIZE * 1.5))
 
 typedef struct {
 	Uint32 text_size;
@@ -72,7 +71,7 @@ static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, siz
 	size_t new_size = (size_t)buffer->text_size + in_len;
 	if (new_size + 1 > buffer->text_capacity) {
 		size_t new_capacity = ((new_size + 1 + TEXT_CHUNK_SIZE - 1) / TEXT_CHUNK_SIZE) * TEXT_CHUNK_SIZE;
-		char *new_buf = realloc(buffer->text, new_capacity);
+		char *new_buf = SDL_realloc(buffer->text, new_capacity);
 		if (!new_buf) {
 			SDL_Log("Error, failed to reallocate new buffer");
 			return;
@@ -160,7 +159,7 @@ static void render_frame(Ctx *ctx, Frame *frame) {
 static TextBuffer *allocate_buffer(Ctx *ctx) {
 	(void)ctx;
 	TextBuffer *buffer;
-	buffer = malloc(sizeof *buffer);
+	buffer = SDL_malloc(sizeof *buffer);
 	if (buffer == NULL) {
 		SDL_Log("Error, can't allocate buffer");
 		return NULL;
@@ -176,16 +175,18 @@ static Uint32 append_frame(Ctx *ctx, TextBuffer *buffer, SDL_FRect bounds) {
 		if (new_cap == 0) {
 			new_cap = 8;
 		}
-		Frame *new_frames = realloc(ctx->frames, new_cap * (sizeof *ctx->frames));
+		Frame *new_frames = SDL_realloc(ctx->frames, new_cap * (sizeof *ctx->frames));
 		if (new_frames == NULL) {
 			SDL_Log("Can't reallocate frames array");
+#ifdef DEBUG
+#endif
 			return -1;
 		}
 		ctx->frames = new_frames;
 		ctx->frames_capacity = new_cap;
 	}
 	Uint32 frame_ind = ctx->frames_count++;
-	ctx->frames[ctx->frames_count++] = (Frame){
+	ctx->frames[frame_ind] = (Frame){
 		.cursor = 0,
 		.scroll = 0,
 		.bounds = bounds,
@@ -195,13 +196,13 @@ static Uint32 append_frame(Ctx *ctx, TextBuffer *buffer, SDL_FRect bounds) {
 }
 
 static Uint32 create_ask_frame(Ctx *ctx) {
-	TextBuffer *buffer = allocate_buffer(&ctx);
+	TextBuffer *buffer = allocate_buffer(ctx);
 	if (buffer == NULL) {
 		SDL_Log("Error, can't allocate ask buffer");
 		return -1;
 	}
 	Uint32 frame = append_frame(ctx, buffer, (SDL_FRect){0, ctx->win_h - LINE_HEIGHT, ctx->win_w, LINE_HEIGHT});
-	if (frame == -1) {
+	if (frame == (Uint32)-1) {
 		SDL_Log("Error, can't append ask buffer");
 		return -1;
 	}
@@ -216,13 +217,14 @@ int main(int argc, char *argv[argc]) {
 		SDL_Log("Error, can't allocate first buffer");
 		return -1;
 	}
-	if (append_frame(&ctx, buffer, (SDL_FRect){0, 0, 100, 100}) == -1) {
+	Uint32 main_frame = append_frame(&ctx, buffer, (SDL_FRect){0, 0, 100, 100});
+	if (main_frame == (Uint32)-1) {
 		SDL_Log("Error, can't create first frame");
 		return -1;
 	}
-	ctx.frames[0].buffer->text_size = 0;
-	ctx.frames[0].buffer->text_capacity = 0;
-	ctx.frames[0].buffer->text = NULL;
+	ctx.frames[main_frame].buffer->text_size = 0;
+	ctx.frames[main_frame].buffer->text_capacity = 0;
+	ctx.frames[main_frame].buffer->text = NULL;
 	ctx.keys = NULL;
 	ctx.linebar_length = 3;
 	ctx.opened_file = NULL;
@@ -344,7 +346,12 @@ int main(int argc, char *argv[argc]) {
 						}; break;
 						case SDL_SCANCODE_O: {
 							if (!(ctx.keymod & SDL_KMOD_CTRL)) break;
-							TODO
+							Uint32 ask_frame = create_ask_frame(&ctx);
+							if (ask_frame == (Uint32)-1) {
+								SDL_Log("Error, can't open ask frame");
+								break;
+							}
+							ctx.focused_frame = ask_frame;
 						}; break;
 						default: {};
 					}
@@ -394,15 +401,15 @@ int main(int argc, char *argv[argc]) {
 		if (!ctx.running) break;
 		SDL_SetRenderDrawColor(ctx.renderer, 0x12, 0x12, 0x12, 0xff);
 		SDL_RenderClear(ctx.renderer);
-		render_frame(&ctx, &ctx.frames[ctx.focused_frame]);
-		if (ctx.input_focus == InputFocus_Ask) {
-			SDL_SetRenderDrawColor(ctx.renderer, 0x08, 0x08, 0x08, 0xff);
-			SDL_RenderRect(ctx.renderer, &(SDL_FRect){0, 100, ctx.win_w, 12});
+		for (Uint32 i = 0; i < ctx.frames_count; ++i) {
+			if (ctx.frames[i].is_deleted) continue;
+			render_frame(&ctx, &ctx.frames[i]);
 		}
 		SDL_RenderPresent(ctx.renderer);
 	}
 #ifdef DEBUG
-	free(ctx.frames[ctx.focused_frame].buffer->text);
+	// To make valgrind happy.
+	SDL_free(ctx.frames[ctx.focused_frame].buffer->text);
 #endif
 	return 0;
 }
