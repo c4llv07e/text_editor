@@ -20,6 +20,14 @@ typedef struct {
 	TextBuffer *buffer;
 } Frame;
 
+typedef enum {
+	InputFocus_Buffer = 0,
+	InputFocus_Ask,
+	InputFocus_length
+} InputFocus;
+
+#define ASK_BUFFER_SIZE 0x1000
+
 typedef struct {
 	SDL_Renderer *renderer;
 	SDL_Window *window;
@@ -35,6 +43,9 @@ typedef struct {
 	Uint32 frames_capacity;
 	Frame *frames;
 	Uint32 focused_frame;
+	InputFocus input_focus;
+	Uint32 ask_buffer_length;
+	char ask_buffer[ASK_BUFFER_SIZE];
 } Ctx;
 
 static const SDL_Color text_color = {0xe6, 0xe6, 0xe6, 0xff};
@@ -301,6 +312,8 @@ int main(int argc, char *argv[argc]) {
 						}; break;
 						case SDL_SCANCODE_O: {
 							if (!(ctx.keymod & SDL_KMOD_CTRL)) break;
+							ctx.input_focus = InputFocus_Ask;
+							ctx.ask_buffer_length = 0;
 						}; break;
 						default: {};
 					}
@@ -350,8 +363,9 @@ int main(int argc, char *argv[argc]) {
 		if (!ctx.running) break;
 		SDL_SetRenderDrawColor(ctx.renderer, 0x12, 0x12, 0x12, 0xff);
 		SDL_RenderClear(ctx.renderer);
-		SDL_SetRenderDrawColor(ctx.renderer, 0xe6, 0xe6, 0xe6, 0xff);
 		render_frame(&ctx, &ctx.frames[ctx.focused_frame]);
+		SDL_SetRenderDrawColor(ctx.renderer, 0x08, 0x08, 0x08, 0xff);
+		SDL_RenderRect(ctx.renderer, &(SDL_FRect){0, 100, ctx.win_w, 12});
 		SDL_RenderPresent(ctx.renderer);
 	}
 #ifdef DEBUG
