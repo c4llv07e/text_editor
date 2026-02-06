@@ -1,2 +1,5 @@
 - Add message input support
 - Add multibuffers
+- Use SDL std instead of string.h and stdlib
+- Use SDL Utf8 support
+- Utilize full SDL logging support (levels, types and prefixes)

@@ -29,12 +29,18 @@ typedef enum {
 	Frame_Type_memory = 0, // The most safe one
 	Frame_Type_file,
 	Frame_Type_ask,
-	Frame_Type_length,
 } Frame_Type;
 
+typedef enum {
+	Ask_Option_open = 0,
+	Ask_Option_save,
+} Ask_Option;
+
 typedef struct {
-	Uint32 is_deleted;
+	bool is_deleted;
 	Frame_Type frame_type;
+	Uint32 parent_frame;
+	Ask_Option ask_option;
 	char *filename;
 	SDL_FRect bounds;
 	SDL_FPoint scroll;
@@ -45,7 +51,7 @@ typedef struct {
 
 #define ASK_BUFFER_SIZE 0x1000
 
-typedef struct {
+typedef struct Frame {
 	SDL_Renderer *renderer;
 	SDL_Window *window;
 	Uint32 last_row;
@@ -62,7 +68,7 @@ typedef struct {
 	Uint32 focused_frame;
 } Ctx;
 
-static const SDL_Color text_color = {0xe6, 0xe6, 0xe6, 0xff};
+static const SDL_Color text_color = {0xe6, 0xe6, 0xe6, SDL_ALPHA_OPAQUE};
 
 static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, size_t in_len, Uint32 pos) {
 	(void)ctx;
@@ -110,7 +116,7 @@ static void render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t le
 #endif
 }
 
-static void render_frame(Ctx *ctx, Frame *frame) {
+static void render_frame(Ctx *ctx, Frame *frame, bool selected) {
 	int line = 0;
 	const char *text = frame->buffer->text;
 	Uint32 length = frame->buffer->text_size;
@@ -139,10 +145,11 @@ static void render_frame(Ctx *ctx, Frame *frame) {
 				}
 			}
 			SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
+			Uint32 cursor_width = selected ? 2 : CHAR_SIZE;
 			SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
 				.x = frame->bounds.x + col * 8,
 				.y = frame->bounds.y + line * 12,
-				.w = 2,
+				.w = cursor_width,
 				.h = 12,
 			});
 		}
@@ -150,10 +157,8 @@ static void render_frame(Ctx *ctx, Frame *frame) {
 		if (end - text >= length) break;
 		line++;
 	}
-#ifdef DEBUG_LAYOUT
-	SDL_SetRenderDrawColor(ctx->renderer, 0x00, 0xff, 0x00, 0xff);
+	SDL_SetRenderDrawColor(ctx->renderer, 0x08, 0x08, 0x08, SDL_ALPHA_OPAQUE);
 	SDL_RenderRect(ctx->renderer, &frame->bounds);
-#endif
 }
 
 static TextBuffer *allocate_buffer(Ctx *ctx) {
@@ -164,8 +169,7 @@ static TextBuffer *allocate_buffer(Ctx *ctx) {
 		SDL_Log("Error, can't allocate buffer");
 		return NULL;
 	}
-	buffer->text_capacity = 0;
-	buffer->text = NULL;
+	*buffer = (TextBuffer){0};
 	return buffer;
 }
 
@@ -195,7 +199,20 @@ static Uint32 append_frame(Ctx *ctx, TextBuffer *buffer, SDL_FRect bounds) {
 	return frame_ind;
 }
 
-static Uint32 create_ask_frame(Ctx *ctx) {
+static Uint32 find_any_frame(Ctx *ctx) {
+	for (Uint32 i = 0; i < ctx->frames_count; ++i) {
+		if (!ctx->frames[i].is_deleted) return i;
+	}
+	SDL_LogError(0, "No more frames, creating one");
+	TextBuffer *buffer = allocate_buffer(ctx);
+	if (buffer == NULL) {
+		SDL_LogError(0, "Can't allocate buffer");
+		return -1;
+	}
+	return append_frame(ctx, buffer, (SDL_FRect){0, 0, ctx->win_w, ctx->win_h});
+}
+
+static Uint32 create_ask_frame(Ctx *ctx, Ask_Option option, Uint32 parent) {
 	TextBuffer *buffer = allocate_buffer(ctx);
 	if (buffer == NULL) {
 		SDL_Log("Error, can't allocate ask buffer");
@@ -206,6 +223,9 @@ static Uint32 create_ask_frame(Ctx *ctx) {
 		SDL_Log("Error, can't append ask buffer");
 		return -1;
 	}
+	ctx->frames[frame].frame_type = Frame_Type_ask;
+	ctx->frames[frame].parent_frame = parent;
+	ctx->frames[frame].ask_option = option;
 	return frame;
 }
 
@@ -254,6 +274,7 @@ int main(int argc, char *argv[argc]) {
 	while (ctx.running) {
 		SDL_Event ev;
 		while (SDL_PollEvent(&ev)) {
+			Frame *current_frame = &ctx.frames[ctx.focused_frame];
 			switch (ev.type) {
 				case SDL_EVENT_QUIT: {
 					ctx.running = false;
@@ -263,82 +284,102 @@ int main(int argc, char *argv[argc]) {
 					switch (ev.key.scancode) {
 						case SDL_SCANCODE_LEFT: {
 							ctx.moving_col = false;
-							if (ctx.frames[ctx.focused_frame].cursor > 0) ctx.frames[ctx.focused_frame].cursor -= 1;
+							if (current_frame->cursor > 0) current_frame->cursor -= 1;
 						}; break;
 						case SDL_SCANCODE_RIGHT: {
 							ctx.moving_col = false;
-							if (ctx.frames[ctx.focused_frame].cursor < ctx.frames[ctx.focused_frame].buffer->text_size) ctx.frames[ctx.focused_frame].cursor += 1;
+							if (current_frame->cursor < current_frame->buffer->text_size) current_frame->cursor += 1;
 						}; break;
 						case SDL_SCANCODE_BACKSPACE: {
 							ctx.moving_col = false;
-							if (ctx.frames[ctx.focused_frame].cursor > 0 && ctx.frames[ctx.focused_frame].buffer->text_size > 0) {
-								memmove(ctx.frames[ctx.focused_frame].buffer->text + ctx.frames[ctx.focused_frame].cursor - 1,
-									ctx.frames[ctx.focused_frame].buffer->text + ctx.frames[ctx.focused_frame].cursor,
-									ctx.frames[ctx.focused_frame].buffer->text_size - ctx.frames[ctx.focused_frame].cursor + 1);
-								ctx.frames[ctx.focused_frame].cursor -= 1;
-								ctx.frames[ctx.focused_frame].buffer->text_size -= 1;
+							if (current_frame->cursor > 0 && current_frame->buffer->text_size > 0) {
+								memmove(current_frame->buffer->text + current_frame->cursor - 1,
+									current_frame->buffer->text + current_frame->cursor,
+									current_frame->buffer->text_size - current_frame->cursor + 1);
+								current_frame->cursor -= 1;
+								current_frame->buffer->text_size -= 1;
+							}
+						}; break;
+						case SDL_SCANCODE_ESCAPE: {
+							if (current_frame->frame_type == Frame_Type_ask) {
+								current_frame->is_deleted = true;
+								ctx.focused_frame = find_any_frame(&ctx);
+								current_frame = &ctx.frames[ctx.focused_frame];
+								break;
 							}
 						}; break;
 						case SDL_SCANCODE_RETURN: {
 							ctx.moving_col = false;
 							char nl = '\n';
-							buffer_insert_text(&ctx, ctx.frames[ctx.focused_frame].buffer, &nl, 1, ctx.frames[ctx.focused_frame].cursor);
-							ctx.frames[ctx.focused_frame].cursor += 1;
+							if (current_frame->frame_type == Frame_Type_ask) {
+								if (current_frame->ask_option == Ask_Option_save) {
+									ctx.frames[current_frame->parent_frame].filename =
+										SDL_strndup(current_frame->buffer->text, current_frame->buffer->text_size);
+								} else if (current_frame->ask_option == Ask_Option_open) {
+									SDL_LogError(0, "Not implemented");
+								} else {
+									SDL_LogError(0, ("Unknown ask option: %" SDL_PRIu32), (Uint32)current_frame->ask_option);
+								}
+								SDL_Log("Asked");
+								break;
+							}
+							buffer_insert_text(&ctx, current_frame->buffer, &nl, 1, current_frame->cursor);
+							current_frame->cursor += 1;
 						}; break;
 						case SDL_SCANCODE_TAB: {
 							ctx.moving_col = false;
 							char nl = '\t';
-							buffer_insert_text(&ctx, ctx.frames[ctx.focused_frame].buffer, &nl, 1, ctx.frames[ctx.focused_frame].cursor);
-							ctx.frames[ctx.focused_frame].cursor += 1;
+							buffer_insert_text(&ctx, current_frame->buffer, &nl, 1, current_frame->cursor);
+							current_frame->cursor += 1;
 						}; break;
 						case SDL_SCANCODE_UP: {
 							int row = 0;
-							if (ctx.frames[ctx.focused_frame].cursor > 0) {
-								ctx.frames[ctx.focused_frame].cursor--;
+							if (current_frame->cursor > 0) {
+								current_frame->cursor--;
 							}
-							while (ctx.frames[ctx.focused_frame].buffer->text[ctx.frames[ctx.focused_frame].cursor] != '\n' && ctx.frames[ctx.focused_frame].cursor > 0) {
-								if (ctx.frames[ctx.focused_frame].buffer->text[ctx.frames[ctx.focused_frame].cursor] == '\t') row += 4;
+							while (current_frame->buffer->text[current_frame->cursor] != '\n' && current_frame->cursor > 0) {
+								if (current_frame->buffer->text[current_frame->cursor] == '\t') row += 4;
 								else row++;
-								ctx.frames[ctx.focused_frame].cursor--;
+								current_frame->cursor--;
 							}
 							if (ctx.moving_col) row = ctx.last_row;
 							else ctx.last_row = row;
 							ctx.moving_col = true;
-							if (ctx.frames[ctx.focused_frame].cursor == 0) break;
-							ctx.frames[ctx.focused_frame].cursor--;
-							while (ctx.frames[ctx.focused_frame].buffer->text[ctx.frames[ctx.focused_frame].cursor] != '\n' && ctx.frames[ctx.focused_frame].cursor > 0) {
-								ctx.frames[ctx.focused_frame].cursor--;
+							if (current_frame->cursor == 0) break;
+							current_frame->cursor--;
+							while (current_frame->buffer->text[current_frame->cursor] != '\n' && current_frame->cursor > 0) {
+								current_frame->cursor--;
 							}
-							if (ctx.frames[ctx.focused_frame].buffer->text[ctx.frames[ctx.focused_frame].cursor] == '\n') ctx.frames[ctx.focused_frame].cursor++;
-							while (row > 0 && ctx.frames[ctx.focused_frame].buffer->text[ctx.frames[ctx.focused_frame].cursor] != '\n') {
-								if (ctx.frames[ctx.focused_frame].buffer->text[ctx.frames[ctx.focused_frame].cursor] == '\t') row -= TAB_WIDTH;
+							if (current_frame->buffer->text[current_frame->cursor] == '\n') current_frame->cursor++;
+							while (row > 0 && current_frame->buffer->text[current_frame->cursor] != '\n') {
+								if (current_frame->buffer->text[current_frame->cursor] == '\t') row -= TAB_WIDTH;
 								else row--;
-								ctx.frames[ctx.focused_frame].cursor++;
+								current_frame->cursor++;
 							}
 						}; break;
 						case SDL_SCANCODE_DOWN: {
 							int row = 0;
-							if (ctx.frames[ctx.focused_frame].cursor > 0) {
-								ctx.frames[ctx.focused_frame].cursor--;
+							if (current_frame->cursor > 0) {
+								current_frame->cursor--;
 							}
-							while (ctx.frames[ctx.focused_frame].buffer->text[ctx.frames[ctx.focused_frame].cursor] != '\n' && ctx.frames[ctx.focused_frame].cursor > 0) {
-								if (ctx.frames[ctx.focused_frame].buffer->text[ctx.frames[ctx.focused_frame].cursor] == '\t') row += 4;
+							while (current_frame->buffer->text[current_frame->cursor] != '\n' && current_frame->cursor > 0) {
+								if (current_frame->buffer->text[current_frame->cursor] == '\t') row += 4;
 								else row++;
-								ctx.frames[ctx.focused_frame].cursor--;
+								current_frame->cursor--;
 							}
 							if (ctx.moving_col) row = ctx.last_row;
 							else ctx.last_row = row;
 							ctx.moving_col = true;
-							ctx.frames[ctx.focused_frame].cursor++;
-							while (ctx.frames[ctx.focused_frame].buffer->text[ctx.frames[ctx.focused_frame].cursor] != '\n' && ctx.frames[ctx.focused_frame].cursor < ctx.frames[ctx.focused_frame].buffer->text_size) {
-								ctx.frames[ctx.focused_frame].cursor++;
+							current_frame->cursor++;
+							while (current_frame->buffer->text[current_frame->cursor] != '\n' && current_frame->cursor < current_frame->buffer->text_size) {
+								current_frame->cursor++;
 							}
-							if (ctx.frames[ctx.focused_frame].cursor == ctx.frames[ctx.focused_frame].buffer->text_size) break;
-							ctx.frames[ctx.focused_frame].cursor++;
-							while (row > 0 && ctx.frames[ctx.focused_frame].cursor < ctx.frames[ctx.focused_frame].buffer->text_size && ctx.frames[ctx.focused_frame].buffer->text[ctx.frames[ctx.focused_frame].cursor] != '\n') {
-								if (ctx.frames[ctx.focused_frame].buffer->text[ctx.frames[ctx.focused_frame].cursor] == '\t') row -= TAB_WIDTH;
+							if (current_frame->cursor == current_frame->buffer->text_size) break;
+							current_frame->cursor++;
+							while (row > 0 && current_frame->cursor < current_frame->buffer->text_size && current_frame->buffer->text[current_frame->cursor] != '\n') {
+								if (current_frame->buffer->text[current_frame->cursor] == '\t') row -= TAB_WIDTH;
 								else row--;
-								ctx.frames[ctx.focused_frame].cursor++;
+								current_frame->cursor++;
 							}
 						}; break;
 						case SDL_SCANCODE_S: {
@@ -346,12 +387,13 @@ int main(int argc, char *argv[argc]) {
 						}; break;
 						case SDL_SCANCODE_O: {
 							if (!(ctx.keymod & SDL_KMOD_CTRL)) break;
-							Uint32 ask_frame = create_ask_frame(&ctx);
+							Uint32 ask_frame = create_ask_frame(&ctx, Ask_Option_open, ctx.focused_frame);
 							if (ask_frame == (Uint32)-1) {
 								SDL_Log("Error, can't open ask frame");
 								break;
 							}
 							ctx.focused_frame = ask_frame;
+							current_frame = &ctx.frames[ask_frame];
 						}; break;
 						default: {};
 					}
@@ -361,21 +403,21 @@ int main(int argc, char *argv[argc]) {
 					int col = ev.button.y / 12;
 					ctx.last_row = row;
 					ctx.moving_col = true;
-					ctx.frames[ctx.focused_frame].cursor = 0;
+					current_frame->cursor = 0;
 					while (col > 0) {
-						if (ctx.frames[ctx.focused_frame].cursor >= ctx.frames[ctx.focused_frame].buffer->text_size) break;
-						ctx.frames[ctx.focused_frame].cursor++;
-						if (ctx.frames[ctx.focused_frame].buffer->text[ctx.frames[ctx.focused_frame].cursor] == '\n') col--;
+						if (current_frame->cursor >= current_frame->buffer->text_size) break;
+						current_frame->cursor++;
+						if (current_frame->buffer->text[current_frame->cursor] == '\n') col--;
 					}
-					ctx.frames[ctx.focused_frame].cursor++;
+					current_frame->cursor++;
 					while (row > 0) {
-						if (ctx.frames[ctx.focused_frame].cursor >= ctx.frames[ctx.focused_frame].buffer->text_size) break;
-						if (ctx.frames[ctx.focused_frame].buffer->text[ctx.frames[ctx.focused_frame].cursor] == '\n') break;
-						if (ctx.frames[ctx.focused_frame].buffer->text[ctx.frames[ctx.focused_frame].cursor] == '\t') {
-							ctx.frames[ctx.focused_frame].cursor++;
+						if (current_frame->cursor >= current_frame->buffer->text_size) break;
+						if (current_frame->buffer->text[current_frame->cursor] == '\n') break;
+						if (current_frame->buffer->text[current_frame->cursor] == '\t') {
+							current_frame->cursor++;
 							row -= TAB_WIDTH;
 						} else {
-							ctx.frames[ctx.focused_frame].cursor++;
+							current_frame->cursor++;
 							row--;
 						}
 					}
@@ -383,8 +425,8 @@ int main(int argc, char *argv[argc]) {
 				case SDL_EVENT_TEXT_INPUT: {
 					ctx.moving_col = false;
 					if (ctx.keymod & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) break;
-					buffer_insert_text(&ctx, ctx.frames[ctx.focused_frame].buffer, ev.text.text, strlen(ev.text.text), ctx.frames[ctx.focused_frame].cursor);
-					ctx.frames[ctx.focused_frame].cursor += strlen(ev.text.text);
+					buffer_insert_text(&ctx, current_frame->buffer, ev.text.text, strlen(ev.text.text), current_frame->cursor);
+					current_frame->cursor += strlen(ev.text.text);
 				}; break;
 			}
 		}
@@ -403,7 +445,7 @@ int main(int argc, char *argv[argc]) {
 		SDL_RenderClear(ctx.renderer);
 		for (Uint32 i = 0; i < ctx.frames_count; ++i) {
 			if (ctx.frames[i].is_deleted) continue;
-			render_frame(&ctx, &ctx.frames[i]);
+			render_frame(&ctx, &ctx.frames[i], ctx.focused_frame == i);
 		}
 		SDL_RenderPresent(ctx.renderer);
 	}
