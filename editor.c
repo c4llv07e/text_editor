@@ -154,33 +154,35 @@ static void render_frame(Ctx *ctx, Uint32 frame, bool selected) {
 			.w = offseted_bounds.w,
 			.h = 12,
 		};
-		Uint32 cursor_line_offset = render_line(ctx, line_bound, start, end - start);
-		if (cursor_line_offset == (Uint32)-1) {
-			cursor_line_offset = end - start;
-		}
-		if (ctx->should_move_cursor && SDL_PointInRectFloat(&ctx->mouse_cursor_pos, &line_bound)) {
-			draw_frame->cursor = start - text + cursor_line_offset;
-		}
-		if (draw_frame->cursor >= (start - draw_frame->buffer->text) && draw_frame->cursor <= (end - draw_frame->buffer->text)) {
-			int col = 0;
-			const char *cur = start;
-			while (draw_frame->cursor > (cur - draw_frame->buffer->text)) {
-				if (*cur == '\t') {
-					col += TAB_WIDTH;
-					cur++;
-				} else {
-					col++;
-					cur++;
-				}
+		if (line * 12 + draw_frame->scroll.y >= 0) {
+			Uint32 cursor_line_offset = render_line(ctx, line_bound, start, end - start);
+			if (cursor_line_offset == (Uint32)-1) {
+				cursor_line_offset = end - start;
 			}
-			SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
-			Uint32 cursor_width = selected ? 2 : CHAR_SIZE;
-			SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
-				.x = offseted_bounds.x + col * 8,
-				.y = offseted_bounds.y + line * 12 + draw_frame->scroll.y,
-				.w = cursor_width,
-				.h = 12,
-			});
+			if (ctx->should_move_cursor && SDL_PointInRectFloat(&ctx->mouse_cursor_pos, &line_bound)) {
+				draw_frame->cursor = start - text + cursor_line_offset;
+			}
+			if (draw_frame->cursor >= (start - draw_frame->buffer->text) && draw_frame->cursor <= (end - draw_frame->buffer->text)) {
+				int col = 0;
+				const char *cur = start;
+				while (draw_frame->cursor > (cur - draw_frame->buffer->text)) {
+					if (*cur == '\t') {
+						col += TAB_WIDTH;
+						cur++;
+					} else {
+						col++;
+						cur++;
+					}
+				}
+				SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
+				Uint32 cursor_width = selected ? 2 : CHAR_SIZE;
+				SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
+					.x = offseted_bounds.x + col * 8,
+					.y = offseted_bounds.y + line * 12 + draw_frame->scroll.y,
+					.w = cursor_width,
+					.h = 12,
+				});
+			}
 		}
 		start = end = end + 1;
 		if (end - text >= length) break;
