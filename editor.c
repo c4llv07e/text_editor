@@ -33,7 +33,7 @@ typedef enum {
 	Ask_Option_save,
 } Ask_Option;
 
-typedef struct {
+typedef struct Frame {
 	bool taken;
 	Frame_Type frame_type;
 	Uint32 parent_frame;
@@ -48,7 +48,7 @@ typedef struct {
 
 #define ASK_BUFFER_SIZE 0x1000
 
-typedef struct Frame {
+typedef struct Ctx {
 	SDL_Renderer *renderer;
 	SDL_Window *window;
 	Uint32 last_row;
@@ -63,6 +63,8 @@ typedef struct Frame {
 	Uint32 frames_capacity;
 	Frame *frames;
 	Uint32 focused_frame;
+	bool should_move_cursor;
+	SDL_FPoint mouse_cursor_pos;
 } Ctx;
 
 static const SDL_Color text_color = {0xe6, 0xe6, 0xe6, SDL_ALPHA_OPAQUE};
@@ -124,12 +126,17 @@ static void render_frame(Ctx *ctx, Frame *frame, bool selected) {
 		while ((end - text < length) && *end != '\n') {
 			end++;
 		}
-		render_line(ctx, (SDL_FRect) {
+		SDL_FRect line_bound = {
 			.x = frame->bounds.x,
 			.y = frame->bounds.y + line * 12 + frame->scroll.y,
 			.w = frame->bounds.w,
 			.h = 12,
-		}, start, end - start);
+		};
+		render_line(ctx, line_bound, start, end - start);
+		if (ctx->should_move_cursor && SDL_PointInRectFloat(&ctx->mouse_cursor_pos, &line_bound)) {
+			ctx->should_move_cursor = false;
+			frame->cursor = start - text;
+		}
 		if (frame->cursor >= (start - frame->buffer->text) && frame->cursor <= (end - frame->buffer->text)) {
 			int col = 0;
 			const char *cur = start;
@@ -404,7 +411,25 @@ int main(int argc, char *argv[argc]) {
 									break;
 								}
 								ctx.focused_frame = ask_frame;
-								current_frame = &ctx.frames[ask_frame];
+								current_frame = &ctx.frames[ctx.focused_frame];
+							}
+						}; break;
+						case SDL_SCANCODE_B: {
+							if (ctx.keymod & SDL_KMOD_ALT) {
+								SDL_FRect bounds = current_frame->bounds;
+								TextBuffer *buffer = allocate_buffer(&ctx);
+								if (buffer == NULL) {
+									SDL_LogError(0, "Can't allocate new buffer");
+									break;
+								}
+								bounds.x += bounds.w;
+								Uint32 frame = append_frame(&ctx, buffer, bounds);
+								if (frame == (Uint32)-1) {
+									SDL_Log("Error, can't open new frame");
+									break;
+								}
+								ctx.focused_frame = frame;
+								current_frame = &ctx.frames[ctx.focused_frame];
 							}
 						}; break;
 						case SDL_SCANCODE_O: {
@@ -430,28 +455,8 @@ int main(int argc, char *argv[argc]) {
 					}
 				}; break;
 				case SDL_EVENT_MOUSE_BUTTON_DOWN: {
-					int row = (ev.button.x / 8.0) + 0.7;
-					int col = ev.button.y / 12;
-					ctx.last_row = row;
-					ctx.moving_col = true;
-					current_frame->cursor = 0;
-					while (col > 0) {
-						if (current_frame->cursor >= current_frame->buffer->text_size) break;
-						current_frame->cursor++;
-						if (current_frame->buffer->text[current_frame->cursor] == '\n') col--;
-					}
-					current_frame->cursor++;
-					while (row > 0) {
-						if (current_frame->cursor >= current_frame->buffer->text_size) break;
-						if (current_frame->buffer->text[current_frame->cursor] == '\n') break;
-						if (current_frame->buffer->text[current_frame->cursor] == '\t') {
-							current_frame->cursor++;
-							row -= TAB_WIDTH;
-						} else {
-							current_frame->cursor++;
-							row--;
-						}
-					}
+					ctx.should_move_cursor = true;
+					ctx.mouse_cursor_pos = (SDL_FPoint){ev.button.x, ev.button.y};
 				}; break;
 				case SDL_EVENT_MOUSE_WHEEL: {
 					current_frame->scroll.y += ev.wheel.y * 32;
