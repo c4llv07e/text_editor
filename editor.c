@@ -291,9 +291,6 @@ int main(int argc, char *argv[argc]) {
 		SDL_Log("Error, can't create first frame");
 		return -1;
 	}
-	ctx.frames[main_frame].buffer->text_size = 0;
-	ctx.frames[main_frame].buffer->text_capacity = 0;
-	ctx.frames[main_frame].buffer->text = NULL;
 	ctx.keys = NULL;
 	ctx.linebar_length = 3;
 	ctx.opened_file = NULL;
@@ -529,6 +526,16 @@ int main(int argc, char *argv[argc]) {
 					if (ev.motion.state & SDL_BUTTON_MMASK) {
 						ctx.transform.x += ev.motion.xrel;
 						ctx.transform.y += ev.motion.yrel;
+					} else if (ev.motion.state & SDL_BUTTON_LMASK) {
+						if (ctx.keymod & SDL_KMOD_CTRL) {
+							current_frame->bounds.x += ev.motion.xrel;
+							current_frame->bounds.y += ev.motion.yrel;
+						}
+					} else if (ev.motion.state & SDL_BUTTON_RMASK) {
+						if (ctx.keymod & SDL_KMOD_CTRL) {
+							current_frame->bounds.w += ev.motion.xrel;
+							current_frame->bounds.h += ev.motion.yrel;
+						}
 					}
 				} break;
 				case SDL_EVENT_MOUSE_WHEEL: {
