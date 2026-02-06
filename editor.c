@@ -37,7 +37,7 @@ typedef enum {
 } Ask_Option;
 
 typedef struct {
-	bool is_deleted;
+	bool taken;
 	Frame_Type frame_type;
 	Uint32 parent_frame;
 	Ask_Option ask_option;
@@ -191,6 +191,7 @@ static Uint32 append_frame(Ctx *ctx, TextBuffer *buffer, SDL_FRect bounds) {
 	}
 	Uint32 frame_ind = ctx->frames_count++;
 	ctx->frames[frame_ind] = (Frame){
+		.taken = true,
 		.cursor = 0,
 		.scroll = 0,
 		.bounds = bounds,
@@ -201,7 +202,7 @@ static Uint32 append_frame(Ctx *ctx, TextBuffer *buffer, SDL_FRect bounds) {
 
 static Uint32 find_any_frame(Ctx *ctx) {
 	for (Uint32 i = 0; i < ctx->frames_count; ++i) {
-		if (!ctx->frames[i].is_deleted) return i;
+		if (ctx->frames[i].taken) return i;
 	}
 	SDL_LogError(0, "No more frames, creating one");
 	TextBuffer *buffer = allocate_buffer(ctx);
@@ -302,7 +303,7 @@ int main(int argc, char *argv[argc]) {
 						}; break;
 						case SDL_SCANCODE_ESCAPE: {
 							if (current_frame->frame_type == Frame_Type_ask) {
-								current_frame->is_deleted = true;
+								current_frame->taken = false;
 								ctx.focused_frame = find_any_frame(&ctx);
 								current_frame = &ctx.frames[ctx.focused_frame];
 								break;
@@ -386,14 +387,23 @@ int main(int argc, char *argv[argc]) {
 							if (!(ctx.keymod & SDL_KMOD_CTRL)) break;
 						}; break;
 						case SDL_SCANCODE_O: {
-							if (!(ctx.keymod & SDL_KMOD_CTRL)) break;
-							Uint32 ask_frame = create_ask_frame(&ctx, Ask_Option_open, ctx.focused_frame);
-							if (ask_frame == (Uint32)-1) {
-								SDL_Log("Error, can't open ask frame");
-								break;
+							if (ctx.keymod & SDL_KMOD_CTRL) {
+								Uint32 ask_frame = create_ask_frame(&ctx, Ask_Option_open, ctx.focused_frame);
+								if (ask_frame == (Uint32)-1) {
+									SDL_Log("Error, can't open ask frame");
+									break;
+								}
+								ctx.focused_frame = ask_frame;
+								current_frame = &ctx.frames[ask_frame];
+							} else if (ctx.keymod & SDL_KMOD_ALT) {
+								for (Uint32 i = ctx.focused_frame + 1; i != ctx.focused_frame; ++i) {
+									if (i > ctx.frames_count) i = 0;
+									if (!ctx.frames[i].taken) continue;
+									ctx.focused_frame = i;
+									current_frame = &ctx.frames[ctx.focused_frame];
+									break;
+								}
 							}
-							ctx.focused_frame = ask_frame;
-							current_frame = &ctx.frames[ask_frame];
 						}; break;
 						default: {};
 					}
@@ -444,7 +454,7 @@ int main(int argc, char *argv[argc]) {
 		SDL_SetRenderDrawColor(ctx.renderer, 0x12, 0x12, 0x12, 0xff);
 		SDL_RenderClear(ctx.renderer);
 		for (Uint32 i = 0; i < ctx.frames_count; ++i) {
-			if (ctx.frames[i].is_deleted) continue;
+			if (!ctx.frames[i].taken) continue;
 			render_frame(&ctx, &ctx.frames[i], ctx.focused_frame == i);
 		}
 		SDL_RenderPresent(ctx.renderer);
