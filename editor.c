@@ -118,7 +118,7 @@ static Uint32 render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t 
 		cursor_x = len;
 	}
 	SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
-	SDL_RenderDebugText(ctx->renderer, frame.x, frame.y, tmp);
+	SDL_RenderDebugText(ctx->renderer, SDL_floor(frame.x), SDL_floor(frame.y), tmp);
 #ifdef DEBUG_LAYOUT
 	SDL_SetRenderDrawColor(ctx->renderer, 0xff, 0x00, 0x00, 0xff);
 	SDL_RenderRect(ctx->renderer, &frame);
