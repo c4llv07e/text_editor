@@ -143,6 +143,13 @@ static void render_frame(Ctx *ctx, Uint32 frame, bool selected) {
 		offseted_bounds.x += ctx->transform.x;
 		offseted_bounds.y += ctx->transform.y;
 	}
+	SDL_SetRenderDrawColor(ctx->renderer, 0x12, 0x12, 0x12, SDL_ALPHA_OPAQUE);
+	SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
+		offseted_bounds.x,
+		offseted_bounds.y,
+		offseted_bounds.w,
+		offseted_bounds.h,
+	});
 	while (end - text <= length) {
 		if (line * LINE_HEIGHT + draw_frame->scroll.y > draw_frame->bounds.h) break;
 		while ((end - text < length) && *end != '\n') {
@@ -197,6 +204,22 @@ static void render_frame(Ctx *ctx, Uint32 frame, bool selected) {
 		ctx->should_move_cursor = false;
 		ctx->focused_frame = frame;
 	}
+#ifdef DEBUG_FILES
+	if (draw_frame->filename) {
+		SDL_SetRenderDrawColor(ctx->renderer, 0x20, 0x20, 0x20, SDL_ALPHA_OPAQUE);
+		SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
+			offseted_bounds.x + offseted_bounds.w - SDL_strlen(draw_frame->filename) * CHAR_SIZE,
+			offseted_bounds.y + offseted_bounds.h - LINE_HEIGHT,
+			SDL_strlen(draw_frame->filename) * CHAR_SIZE,
+			LINE_HEIGHT,
+		});
+		SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
+		SDL_RenderDebugText(ctx->renderer,
+			offseted_bounds.x + offseted_bounds.w - SDL_strlen(draw_frame->filename) * CHAR_SIZE,
+			offseted_bounds.y + offseted_bounds.h - LINE_HEIGHT,
+			draw_frame->filename);
+	}
+#endif
 	if (selected) {
 		SDL_SetRenderDrawColor(ctx->renderer, 0x08, 0x38, 0x08, SDL_ALPHA_OPAQUE);
 	} else {
@@ -371,6 +394,11 @@ int main(int argc, char *argv[argc]) {
 									Frame *parent_frame = &ctx.frames[current_frame->parent_frame];
 									parent_frame->filename =
 										SDL_strndup(current_frame->buffer->text, current_frame->buffer->text_size);
+									parent_frame->buffer = allocate_buffer(&ctx);
+									if (parent_frame->buffer == NULL) {
+										SDL_LogError(0, "Can't allocate buffer for this file");
+										return -1;
+									}
 									parent_frame->buffer->text = SDL_LoadFile(parent_frame->filename, &parent_frame->buffer->text_capacity);
 									parent_frame->buffer->text_size = parent_frame->buffer->text_capacity;
 									current_frame->taken = false;
@@ -379,7 +407,6 @@ int main(int argc, char *argv[argc]) {
 								} else {
 									SDL_LogError(0, ("Unknown ask option: %" SDL_PRIu32), (Uint32)current_frame->ask_option);
 								}
-								SDL_Log("Asked");
 								break;
 							}
 							buffer_insert_text(&ctx, current_frame->buffer, &nl, 1, current_frame->cursor);
@@ -456,13 +483,8 @@ int main(int argc, char *argv[argc]) {
 							if (ctx.keymod & SDL_KMOD_ALT) {
 								current_frame->bounds.w /= 2;
 								SDL_FRect bounds = current_frame->bounds;
-								TextBuffer *buffer = allocate_buffer(&ctx);
-								if (buffer == NULL) {
-									SDL_LogError(0, "Can't allocate new buffer");
-									break;
-								}
 								bounds.x += bounds.w;
-								Uint32 frame = append_frame(&ctx, buffer, bounds);
+								Uint32 frame = append_frame(&ctx, current_frame->buffer, bounds);
 								if (frame == (Uint32)-1) {
 									SDL_Log("Error, can't open new frame");
 									break;
@@ -475,13 +497,8 @@ int main(int argc, char *argv[argc]) {
 							if (ctx.keymod & SDL_KMOD_ALT) {
 								current_frame->bounds.h /= 2;
 								SDL_FRect bounds = current_frame->bounds;
-								TextBuffer *buffer = allocate_buffer(&ctx);
-								if (buffer == NULL) {
-									SDL_LogError(0, "Can't allocate new buffer");
-									break;
-								}
 								bounds.y += bounds.h;
-								Uint32 frame = append_frame(&ctx, buffer, bounds);
+								Uint32 frame = append_frame(&ctx, current_frame->buffer, bounds);
 								if (frame == (Uint32)-1) {
 									SDL_Log("Error, can't open new frame");
 									break;
@@ -514,8 +531,12 @@ int main(int argc, char *argv[argc]) {
 				}; break;
 				case SDL_EVENT_MOUSE_BUTTON_DOWN: {
 					if (ev.button.button == SDL_BUTTON_LEFT) {
-						ctx.should_move_cursor = true;
-						ctx.mouse_cursor_pos = (SDL_FPoint){ev.button.x, ev.button.y};
+						if (ctx.keymod & SDL_KMOD_CTRL) {
+						} else if (ctx.keymod & SDL_KMOD_ALT) {
+						} else {
+							ctx.should_move_cursor = true;
+							ctx.mouse_cursor_pos = (SDL_FPoint){ev.button.x, ev.button.y};
+						}
 					} else if (ev.button.button == SDL_BUTTON_MIDDLE) {
 						Uint64 time = SDL_GetTicks();
 						if (time - ctx.last_middle_click <= 300) {
@@ -562,7 +583,7 @@ int main(int argc, char *argv[argc]) {
 		ctx.keys = SDL_GetKeyboardState(NULL);
 		ctx.keymod = SDL_GetModState();
 		if (!ctx.running) break;
-		SDL_SetRenderDrawColor(ctx.renderer, 0x12, 0x12, 0x12, 0xff);
+		SDL_SetRenderDrawColor(ctx.renderer, 0x04, 0x04, 0x04, 0xff);
 		SDL_RenderClear(ctx.renderer);
 		for (Uint32 i = 0; i < ctx.frames_count; ++i) {
 			if (!ctx.frames[i].taken) continue;

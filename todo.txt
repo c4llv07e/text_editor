@@ -2,3 +2,6 @@
 - Utilize full SDL logging support (levels, types and prefixes)
 - Fix memory leaks in save/open files
 - Handle save/open errors
+- Fix cursor not drawing if last empty line
+- Add ref counter to buffers
+	- Opening file should create new buffer, not override current
