@@ -35,6 +35,7 @@ typedef enum {
 
 typedef struct Frame {
 	bool taken;
+	bool is_global;
 	Frame_Type frame_type;
 	Uint32 parent_frame;
 	Ask_Option ask_option;
@@ -65,6 +66,7 @@ typedef struct Ctx {
 	Uint32 focused_frame;
 	bool should_move_cursor;
 	SDL_FPoint mouse_cursor_pos;
+	SDL_FPoint transform;
 } Ctx;
 
 static const SDL_Color text_color = {0xe6, 0xe6, 0xe6, SDL_ALPHA_OPAQUE};
@@ -94,10 +96,14 @@ static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, siz
 
 #define TAB_WIDTH 8
 
-static void render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t len) {
+static Uint32 render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t len) {
 	char tmp[1024];
+	Uint32 cursor_x = -1;
 	size_t out = 0;
 	for (size_t i = 0; i < len && out < sizeof(tmp) - 1 && out < frame.w / 8; ++i) {
+		if (((frame.x + (out) * CHAR_SIZE) <= ctx->mouse_cursor_pos.x + CHAR_SIZE * 0.3)) {
+			cursor_x = i;
+		}
 		if (buffer[i] == '\t') {
 			for (int s = 0; s < TAB_WIDTH && out < sizeof(tmp) - 1; ++s) {
 				tmp[out++] = ' ';
@@ -113,34 +119,48 @@ static void render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t le
 	SDL_SetRenderDrawColor(ctx->renderer, 0xff, 0x00, 0x00, 0xff);
 	SDL_RenderRect(ctx->renderer, &frame);
 #endif
+	return cursor_x;
 }
 
-static void render_frame(Ctx *ctx, Frame *frame, bool selected) {
+static void render_frame(Ctx *ctx, Uint32 frame, bool selected) {
 	int line = 0;
-	const char *text = frame->buffer->text;
-	Uint32 length = frame->buffer->text_size;
+	Frame *draw_frame = &ctx->frames[frame];
+	const char *text = draw_frame->buffer->text;
+	Uint32 length = draw_frame->buffer->text_size;
 	const char *start = text;
 	const char *end = start;
+	SDL_FRect offseted_bounds = (SDL_FRect) {
+			.x = draw_frame->bounds.x,
+			.y = draw_frame->bounds.y,
+			.w = draw_frame->bounds.w,
+			.h = draw_frame->bounds.h,
+	};
+	if (!draw_frame->is_global) {
+		offseted_bounds.x += ctx->transform.x;
+		offseted_bounds.y += ctx->transform.y;
+	}
 	while (end - text <= length) {
-		if (line * LINE_HEIGHT + frame->scroll.y > frame->bounds.h) break;
+		if (line * LINE_HEIGHT + draw_frame->scroll.y > draw_frame->bounds.h) break;
 		while ((end - text < length) && *end != '\n') {
 			end++;
 		}
 		SDL_FRect line_bound = {
-			.x = frame->bounds.x,
-			.y = frame->bounds.y + line * 12 + frame->scroll.y,
-			.w = frame->bounds.w,
+			.x = offseted_bounds.x,
+			.y = offseted_bounds.y + line * 12 + draw_frame->scroll.y,
+			.w = offseted_bounds.w,
 			.h = 12,
 		};
-		render_line(ctx, line_bound, start, end - start);
-		if (ctx->should_move_cursor && SDL_PointInRectFloat(&ctx->mouse_cursor_pos, &line_bound)) {
-			ctx->should_move_cursor = false;
-			frame->cursor = start - text;
+		Uint32 cursor_line_offset = render_line(ctx, line_bound, start, end - start);
+		if (cursor_line_offset == (Uint32)-1) {
+			cursor_line_offset = end - start;
 		}
-		if (frame->cursor >= (start - frame->buffer->text) && frame->cursor <= (end - frame->buffer->text)) {
+		if (ctx->should_move_cursor && SDL_PointInRectFloat(&ctx->mouse_cursor_pos, &line_bound)) {
+			draw_frame->cursor = start - text + cursor_line_offset;
+		}
+		if (draw_frame->cursor >= (start - draw_frame->buffer->text) && draw_frame->cursor <= (end - draw_frame->buffer->text)) {
 			int col = 0;
 			const char *cur = start;
-			while (frame->cursor > (cur - frame->buffer->text)) {
+			while (draw_frame->cursor > (cur - draw_frame->buffer->text)) {
 				if (*cur == '\t') {
 					col += TAB_WIDTH;
 					cur++;
@@ -152,8 +172,8 @@ static void render_frame(Ctx *ctx, Frame *frame, bool selected) {
 			SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
 			Uint32 cursor_width = selected ? 2 : CHAR_SIZE;
 			SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
-				.x = frame->bounds.x + col * 8,
-				.y = frame->bounds.y + line * 12 + frame->scroll.y,
+				.x = offseted_bounds.x + col * 8,
+				.y = offseted_bounds.y + line * 12 + draw_frame->scroll.y,
 				.w = cursor_width,
 				.h = 12,
 			});
@@ -162,12 +182,26 @@ static void render_frame(Ctx *ctx, Frame *frame, bool selected) {
 		if (end - text >= length) break;
 		line++;
 	}
+	if (ctx->should_move_cursor && SDL_PointInRectFloat(&ctx->mouse_cursor_pos, &(SDL_FRect) {
+		offseted_bounds.x,
+		offseted_bounds.y,
+		offseted_bounds.w,
+		offseted_bounds.h,
+	})) {
+		ctx->should_move_cursor = false;
+		ctx->focused_frame = frame;
+	}
 	if (selected) {
 		SDL_SetRenderDrawColor(ctx->renderer, 0x08, 0x38, 0x08, SDL_ALPHA_OPAQUE);
 	} else {
 		SDL_SetRenderDrawColor(ctx->renderer, 0x08, 0x08, 0x08, SDL_ALPHA_OPAQUE);
 	}
-	SDL_RenderRect(ctx->renderer, &frame->bounds);
+	SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
+		offseted_bounds.x,
+		offseted_bounds.y,
+		offseted_bounds.w,
+		offseted_bounds.h,
+	});
 }
 
 static TextBuffer *allocate_buffer(Ctx *ctx) {
@@ -234,6 +268,7 @@ static Uint32 create_ask_frame(Ctx *ctx, Ask_Option option, Uint32 parent) {
 		return -1;
 	}
 	ctx->frames[frame].frame_type = Frame_Type_ask;
+	ctx->frames[frame].is_global = true;
 	ctx->frames[frame].parent_frame = parent;
 	ctx->frames[frame].ask_option = option;
 	return frame;
@@ -455,9 +490,17 @@ int main(int argc, char *argv[argc]) {
 					}
 				}; break;
 				case SDL_EVENT_MOUSE_BUTTON_DOWN: {
-					ctx.should_move_cursor = true;
-					ctx.mouse_cursor_pos = (SDL_FPoint){ev.button.x, ev.button.y};
+					if (ev.button.button == SDL_BUTTON_LEFT) {
+						ctx.should_move_cursor = true;
+						ctx.mouse_cursor_pos = (SDL_FPoint){ev.button.x, ev.button.y};
+					}
 				}; break;
+				case SDL_EVENT_MOUSE_MOTION: {
+					if (ev.motion.state & SDL_BUTTON_MMASK) {
+						ctx.transform.x += ev.motion.xrel;
+						ctx.transform.y += ev.motion.yrel;
+					}
+				} break;
 				case SDL_EVENT_MOUSE_WHEEL: {
 					current_frame->scroll.y += ev.wheel.y * 32;
 				} break;
@@ -484,7 +527,7 @@ int main(int argc, char *argv[argc]) {
 		SDL_RenderClear(ctx.renderer);
 		for (Uint32 i = 0; i < ctx.frames_count; ++i) {
 			if (!ctx.frames[i].taken) continue;
-			render_frame(&ctx, &ctx.frames[i], ctx.focused_frame == i);
+			render_frame(&ctx, i, ctx.focused_frame == i);
 		}
 		SDL_RenderPresent(ctx.renderer);
 	}
