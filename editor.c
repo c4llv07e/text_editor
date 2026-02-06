@@ -67,6 +67,7 @@ typedef struct Ctx {
 	bool should_move_cursor;
 	SDL_FPoint mouse_cursor_pos;
 	SDL_FPoint transform;
+	Uint64 last_middle_click;
 } Ctx;
 
 static const SDL_Color text_color = {0xe6, 0xe6, 0xe6, SDL_ALPHA_OPAQUE};
@@ -112,7 +113,10 @@ static Uint32 render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t 
 			tmp[out++] = buffer[i];
 		}
 	}
-	tmp[out] = '\0';
+	tmp[out++] = '\0';
+	if (((frame.x + (out) * CHAR_SIZE) <= ctx->mouse_cursor_pos.x + CHAR_SIZE * 0.3)) {
+		cursor_x = len;
+	}
 	SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
 	SDL_RenderDebugText(ctx->renderer, frame.x, frame.y, tmp);
 #ifdef DEBUG_LAYOUT
@@ -282,7 +286,7 @@ int main(int argc, char *argv[argc]) {
 		SDL_Log("Error, can't allocate first buffer");
 		return -1;
 	}
-	Uint32 main_frame = append_frame(&ctx, buffer, (SDL_FRect){0, 0, 400, 400});
+	Uint32 main_frame = append_frame(&ctx, buffer, (SDL_FRect){0, 0, 0x300, 0x200});
 	if (main_frame == (Uint32)-1) {
 		SDL_Log("Error, can't create first frame");
 		return -1;
@@ -451,6 +455,7 @@ int main(int argc, char *argv[argc]) {
 						}; break;
 						case SDL_SCANCODE_B: {
 							if (ctx.keymod & SDL_KMOD_ALT) {
+								current_frame->bounds.w /= 2;
 								SDL_FRect bounds = current_frame->bounds;
 								TextBuffer *buffer = allocate_buffer(&ctx);
 								if (buffer == NULL) {
@@ -458,6 +463,25 @@ int main(int argc, char *argv[argc]) {
 									break;
 								}
 								bounds.x += bounds.w;
+								Uint32 frame = append_frame(&ctx, buffer, bounds);
+								if (frame == (Uint32)-1) {
+									SDL_Log("Error, can't open new frame");
+									break;
+								}
+								ctx.focused_frame = frame;
+								current_frame = &ctx.frames[ctx.focused_frame];
+							}
+						}; break;
+						case SDL_SCANCODE_V: {
+							if (ctx.keymod & SDL_KMOD_ALT) {
+								current_frame->bounds.h /= 2;
+								SDL_FRect bounds = current_frame->bounds;
+								TextBuffer *buffer = allocate_buffer(&ctx);
+								if (buffer == NULL) {
+									SDL_LogError(0, "Can't allocate new buffer");
+									break;
+								}
+								bounds.y += bounds.h;
 								Uint32 frame = append_frame(&ctx, buffer, bounds);
 								if (frame == (Uint32)-1) {
 									SDL_Log("Error, can't open new frame");
@@ -493,6 +517,12 @@ int main(int argc, char *argv[argc]) {
 					if (ev.button.button == SDL_BUTTON_LEFT) {
 						ctx.should_move_cursor = true;
 						ctx.mouse_cursor_pos = (SDL_FPoint){ev.button.x, ev.button.y};
+					} else if (ev.button.button == SDL_BUTTON_MIDDLE) {
+						Uint64 time = SDL_GetTicks();
+						if (time - ctx.last_middle_click <= 300) {
+							ctx.transform = (SDL_FPoint){0};
+						}
+						ctx.last_middle_click = time;
 					}
 				}; break;
 				case SDL_EVENT_MOUSE_MOTION: {
