@@ -10,9 +10,6 @@
 */
 
 #include <SDL3/SDL.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <string.h>
 
 #define TEXT_CHUNK_SIZE 256
 
@@ -20,8 +17,8 @@
 #define LINE_HEIGHT ((int)(CHAR_SIZE * 1.5))
 
 typedef struct {
-	Uint32 text_size;
-	Uint32 text_capacity;
+	size_t text_size;
+	size_t text_capacity;
 	char *text;
 } TextBuffer;
 
@@ -85,10 +82,10 @@ static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, siz
 		buffer->text = new_buf;
 		buffer->text_capacity = (Uint32)new_capacity;
 	}
-	memmove(buffer->text + pos + in_len,
+	SDL_memmove(buffer->text + pos + in_len,
 		buffer->text + pos,
 		(size_t)buffer->text_size - (size_t)pos);
-	memcpy(buffer->text + pos, in, in_len);
+	SDL_memcpy(buffer->text + pos, in, in_len);
 	buffer->text_size = (Uint32)new_size;
 	buffer->text[buffer->text_size] = '\0';
 }
@@ -123,6 +120,7 @@ static void render_frame(Ctx *ctx, Frame *frame, bool selected) {
 	const char *start = text;
 	const char *end = start;
 	while (end - text <= length) {
+		if (line * LINE_HEIGHT > frame->bounds.h) break;
 		while ((end - text < length) && *end != '\n') {
 			end++;
 		}
@@ -157,7 +155,11 @@ static void render_frame(Ctx *ctx, Frame *frame, bool selected) {
 		if (end - text >= length) break;
 		line++;
 	}
-	SDL_SetRenderDrawColor(ctx->renderer, 0x08, 0x08, 0x08, SDL_ALPHA_OPAQUE);
+	if (selected) {
+		SDL_SetRenderDrawColor(ctx->renderer, 0x08, 0x38, 0x08, SDL_ALPHA_OPAQUE);
+	} else {
+		SDL_SetRenderDrawColor(ctx->renderer, 0x08, 0x08, 0x08, SDL_ALPHA_OPAQUE);
+	}
 	SDL_RenderRect(ctx->renderer, &frame->bounds);
 }
 
@@ -238,7 +240,7 @@ int main(int argc, char *argv[argc]) {
 		SDL_Log("Error, can't allocate first buffer");
 		return -1;
 	}
-	Uint32 main_frame = append_frame(&ctx, buffer, (SDL_FRect){0, 0, 100, 100});
+	Uint32 main_frame = append_frame(&ctx, buffer, (SDL_FRect){0, 0, 400, 400});
 	if (main_frame == (Uint32)-1) {
 		SDL_Log("Error, can't create first frame");
 		return -1;
@@ -294,7 +296,7 @@ int main(int argc, char *argv[argc]) {
 						case SDL_SCANCODE_BACKSPACE: {
 							ctx.moving_col = false;
 							if (current_frame->cursor > 0 && current_frame->buffer->text_size > 0) {
-								memmove(current_frame->buffer->text + current_frame->cursor - 1,
+								SDL_memmove(current_frame->buffer->text + current_frame->cursor - 1,
 									current_frame->buffer->text + current_frame->cursor,
 									current_frame->buffer->text_size - current_frame->cursor + 1);
 								current_frame->cursor -= 1;
@@ -316,8 +318,19 @@ int main(int argc, char *argv[argc]) {
 								if (current_frame->ask_option == Ask_Option_save) {
 									ctx.frames[current_frame->parent_frame].filename =
 										SDL_strndup(current_frame->buffer->text, current_frame->buffer->text_size);
+									current_frame->taken = false;
+									ctx.focused_frame = current_frame->parent_frame;
+									current_frame = &ctx.frames[ctx.focused_frame];
+									SDL_assert_release(0 && "TODO");
 								} else if (current_frame->ask_option == Ask_Option_open) {
-									SDL_LogError(0, "Not implemented");
+									Frame *parent_frame = &ctx.frames[current_frame->parent_frame];
+									parent_frame->filename =
+										SDL_strndup(current_frame->buffer->text, current_frame->buffer->text_size);
+									parent_frame->buffer->text = SDL_LoadFile(parent_frame->filename, &parent_frame->buffer->text_capacity);
+									parent_frame->buffer->text_size = parent_frame->buffer->text_capacity;
+									current_frame->taken = false;
+									ctx.focused_frame = current_frame->parent_frame;
+									current_frame = &ctx.frames[ctx.focused_frame];
 								} else {
 									SDL_LogError(0, ("Unknown ask option: %" SDL_PRIu32), (Uint32)current_frame->ask_option);
 								}
@@ -384,7 +397,15 @@ int main(int argc, char *argv[argc]) {
 							}
 						}; break;
 						case SDL_SCANCODE_S: {
-							if (!(ctx.keymod & SDL_KMOD_CTRL)) break;
+							if (ctx.keymod & SDL_KMOD_CTRL) {
+								Uint32 ask_frame = create_ask_frame(&ctx, Ask_Option_save, ctx.focused_frame);
+								if (ask_frame == (Uint32)-1) {
+									SDL_Log("Error, can't open ask frame");
+									break;
+								}
+								ctx.focused_frame = ask_frame;
+								current_frame = &ctx.frames[ask_frame];
+							}
 						}; break;
 						case SDL_SCANCODE_O: {
 							if (ctx.keymod & SDL_KMOD_CTRL) {
@@ -435,8 +456,8 @@ int main(int argc, char *argv[argc]) {
 				case SDL_EVENT_TEXT_INPUT: {
 					ctx.moving_col = false;
 					if (ctx.keymod & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) break;
-					buffer_insert_text(&ctx, current_frame->buffer, ev.text.text, strlen(ev.text.text), current_frame->cursor);
-					current_frame->cursor += strlen(ev.text.text);
+					buffer_insert_text(&ctx, current_frame->buffer, ev.text.text, SDL_strlen(ev.text.text), current_frame->cursor);
+					current_frame->cursor += SDL_strlen(ev.text.text);
 				}; break;
 			}
 		}
