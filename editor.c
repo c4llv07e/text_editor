@@ -157,11 +157,11 @@ static void render_frame(Ctx *ctx, Uint32 frame, bool selected) {
 		}
 		SDL_FRect line_bound = {
 			.x = offseted_bounds.x,
-			.y = offseted_bounds.y + line * 12 + draw_frame->scroll.y,
+			.y = offseted_bounds.y + line * LINE_HEIGHT + draw_frame->scroll.y,
 			.w = offseted_bounds.w,
-			.h = 12,
+			.h = LINE_HEIGHT,
 		};
-		if (line * 12 + draw_frame->scroll.y >= 0) {
+		if (line * LINE_HEIGHT + draw_frame->scroll.y >= 0) {
 			Uint32 cursor_line_offset = render_line(ctx, line_bound, start, end - start);
 			if (cursor_line_offset == (Uint32)-1) {
 				cursor_line_offset = end - start;
@@ -184,10 +184,10 @@ static void render_frame(Ctx *ctx, Uint32 frame, bool selected) {
 				SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
 				Uint32 cursor_width = selected ? 2 : CHAR_SIZE;
 				SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
-					.x = offseted_bounds.x + col * 8,
-					.y = offseted_bounds.y + line * 12 + draw_frame->scroll.y,
+					.x = offseted_bounds.x + col * CHAR_SIZE,
+					.y = offseted_bounds.y + line * LINE_HEIGHT + draw_frame->scroll.y,
 					.w = cursor_width,
-					.h = 12,
+					.h = LINE_HEIGHT,
 				});
 			}
 		}
@@ -306,6 +306,11 @@ static Uint32 create_ask_frame(Ctx *ctx, Ask_Option option, Uint32 parent) {
 int main(int argc, char *argv[argc]) {
 	(void)argv;
 	Ctx ctx = {0};
+	SDL_SetAppMetadata("Text editor", "1.0", "c4ll.text-editor");
+	if (!SDL_Init(SDL_INIT_VIDEO)) {
+		SDL_LogError(0, "Couldn't initialize SDL: %s", SDL_GetError());
+		return -1;
+	}
 	TextBuffer *buffer = allocate_buffer(&ctx);
 	if (buffer == NULL) {
 		SDL_Log("Error, can't allocate first buffer");
@@ -320,9 +325,6 @@ int main(int argc, char *argv[argc]) {
 	ctx.linebar_length = 3;
 	ctx.opened_file = NULL;
 	Uint64 window_flags =  SDL_WINDOW_RESIZABLE;
-#if defined(DEBUG) && !defined(_WIN32)
-	window_flags |= SDL_WINDOW_UTILITY;
-#endif
 	if (!SDL_CreateWindowAndRenderer("test", 0x300, 0x200, window_flags, &ctx.window, &ctx.renderer)) {
 		SDL_Log("Error, can't init renderer: %s", SDL_GetError());
 		return -1;
@@ -579,6 +581,7 @@ int main(int argc, char *argv[argc]) {
 			SDL_Log("Can't get window properties: %s", SDL_GetError());
 			// Maybe exiting right away isn't required, but I don't know what should happened so SDL couldn't get window size
 			ctx.running = false;
+			return -1;
 		}
 		ctx.keys = SDL_GetKeyboardState(NULL);
 		ctx.keymod = SDL_GetModState();
