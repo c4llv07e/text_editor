@@ -120,13 +120,13 @@ static void render_frame(Ctx *ctx, Frame *frame, bool selected) {
 	const char *start = text;
 	const char *end = start;
 	while (end - text <= length) {
-		if (line * LINE_HEIGHT > frame->bounds.h) break;
+		if (line * LINE_HEIGHT + frame->scroll.y > frame->bounds.h) break;
 		while ((end - text < length) && *end != '\n') {
 			end++;
 		}
 		render_line(ctx, (SDL_FRect) {
 			.x = frame->bounds.x,
-			.y = frame->bounds.y + line * 12,
+			.y = frame->bounds.y + line * 12 + frame->scroll.y,
 			.w = frame->bounds.w,
 			.h = 12,
 		}, start, end - start);
@@ -146,7 +146,7 @@ static void render_frame(Ctx *ctx, Frame *frame, bool selected) {
 			Uint32 cursor_width = selected ? 2 : CHAR_SIZE;
 			SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
 				.x = frame->bounds.x + col * 8,
-				.y = frame->bounds.y + line * 12,
+				.y = frame->bounds.y + line * 12 + frame->scroll.y,
 				.w = cursor_width,
 				.h = 12,
 			});
@@ -453,6 +453,9 @@ int main(int argc, char *argv[argc]) {
 						}
 					}
 				}; break;
+				case SDL_EVENT_MOUSE_WHEEL: {
+					current_frame->scroll.y += ev.wheel.y * 32;
+				} break;
 				case SDL_EVENT_TEXT_INPUT: {
 					ctx.moving_col = false;
 					if (ctx.keymod & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) break;

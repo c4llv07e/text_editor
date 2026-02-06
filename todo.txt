@@ -3,3 +3,4 @@
 - Use SDL std instead of string.h and stdlib
 - Use SDL Utf8 support
 - Utilize full SDL logging support (levels, types and prefixes)
+- Fix memory leaks in save/open files
