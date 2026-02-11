@@ -135,7 +135,20 @@ static inline Uint32 coords_to_text_index(Ctx *ctx, size_t text_length, char tex
 	return ind;
 }
 
-static inline bool get_frame_render_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
+static inline Uint32 bytes_to_visual(Ctx *ctx, size_t text_length, char text[text_length], Uint32 byte) {
+	Uint32 visual_char = 0;
+	(void) ctx;
+	for (Uint32 ind = 0; ind < byte && ind < text_length; ++ind) {
+		if (text[ind] == '\t') {
+			visual_char += TAB_WIDTH;
+		} else {
+			visual_char += 1;
+		}
+	}
+	return visual_char;
+}
+
+bool get_frame_render_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
 	SDL_assert(bounds != NULL);
 	SDL_assert(ctx->frames_count >= frame);
 	SDL_FRect frame_bounds = ctx->frames[frame].bounds;
@@ -251,7 +264,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		if (line.text - text <= draw_frame->cursor &&
 			((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->cursor))) {
 			SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
-				.x = line_bounds.x + (draw_frame->cursor - (line.text - text)) * CHAR_SIZE,
+				.x = line_bounds.x + bytes_to_visual(ctx, line.size, line.text, draw_frame->cursor - (line.text - text)) * CHAR_SIZE,
 				.y = line_bounds.y,
 				.w = 2,
 				.h = LINE_HEIGHT,
