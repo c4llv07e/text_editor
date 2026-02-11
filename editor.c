@@ -211,6 +211,9 @@ static Uint32 split_into_lines(Ctx *ctx, Uint32 strings_length, String strings[s
 	(void)ctx;
 	char *end = text;
 	Sint32 line = -line_offset;
+	if (text == NULL) {
+		return 0;
+	}
 	while (*end != '\0') {
 		if ((Sint32)strings_length <= line) break;
 		while (*end != '\0' && *end != '\n') end++;
