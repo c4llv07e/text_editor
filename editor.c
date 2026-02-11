@@ -126,13 +126,13 @@ static inline Uint32 coords_to_text_index(Ctx *ctx, size_t text_length, char tex
 		float diff = (pos - (float)visual_char * CHAR_SIZE) / CHAR_SIZE;
 		if (text[ind] == '\t') {
 			visual_char += TAB_WIDTH;
-			if (diff <= TAB_WIDTH / 2 && diff >= -0.4) return ind;
+			if (diff <= TAB_WIDTH / 2) return ind;
 		} else {
 			visual_char += 1;
-			if (diff <= 0.6 && diff >= -0.4) return ind;
+			if (diff <= 0.6) return ind;
 		}
 	}
-	return ind - 1;
+	return ind;
 }
 
 static inline bool get_frame_render_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
@@ -155,6 +155,7 @@ static inline bool get_frame_render_rect(Ctx *ctx, Uint32 frame, SDL_FRect *boun
 static inline bool get_frame_render_lines_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
 	get_frame_render_rect(ctx, frame, bounds);
 	bounds->x += CHAR_SIZE * 4;
+			if (diff <= TAB_WIDTH / 2 + 0.6 && diff >= TAB_WIDTH / 2 - 0.4) return ind + 1;
 	bounds->w -= CHAR_SIZE * 4;
 	return true;
 }
@@ -179,6 +180,19 @@ static void render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t le
 	SDL_RenderRect(ctx->renderer, &frame);
 #endif
 	return;
+}
+
+static String get_line(Ctx *ctx, size_t text_size, char text[text_size], Uint32 linenum) {
+	char *begin = text;
+	(void) ctx;
+	while (linenum != 0) {
+		if (*begin == '\0') return (String){0};
+		if (*begin == '\n') linenum -= 1;
+		begin += 1;
+	}
+	text = begin;
+	while (*text != '\0' && *text != '\n') text += 1;
+	return (String){.text = begin, .size = text - begin};
 }
 
 static Uint32 split_into_lines(Ctx *ctx, Uint32 strings_length, String strings[strings_length], char *text, Uint32 line_offset) {
@@ -584,6 +598,22 @@ int main(int argc, char *argv[argc]) {
 									if (i != 0)
 										SDL_memmove(&ctx.sorted_frames[1], &ctx.sorted_frames[0], i * sizeof (*ctx.sorted_frames));
 									ctx.sorted_frames[0] = first;
+									SDL_FRect bounds;
+									Frame *frame = &ctx.frames[first];
+									get_frame_render_lines_rect(&ctx, first, &bounds);
+									if (ev.button.y < bounds.y) {
+										frame->cursor = 0;
+										break;
+									}
+									Uint32 linenum = (ev.button.y - bounds.y) / LINE_HEIGHT;
+									String line = get_line(&ctx, frame->buffer->text_size, frame->buffer->text, (Uint32)linenum);
+									if (line.text == NULL) {
+										frame->cursor = frame->buffer->text_size;
+										break;
+									}
+									// Don't fucking reallocate sized strings which only point is zero copy.
+									SDL_assert(line.text >= frame->buffer->text && line.text <= frame->buffer->text + frame->buffer->text_size);
+									frame->cursor = line.text - frame->buffer->text + coords_to_text_index(&ctx, line.size, line.text, ev.button.x - bounds.x);
 									break;
 								}
 							}
