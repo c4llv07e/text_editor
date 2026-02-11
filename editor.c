@@ -7,14 +7,25 @@
 	"Ask buffer" (aka emacs minibuffer) should be the frame too to work with keybings.
 	Frame type should work as a smaill and controllable polymorphism, i.e. cast the meaning of the buffer,
 		not the "class".
+	Font is always monospace, because with non-monospaced font: (sorry, acme)
+		- converting coordinates to index is hard,
+		- computing layout is slower,
+		- second aligment after indent doesn't exists,
+		- rectangular selection doesn't work.
 */
 
 #include <SDL3/SDL.h>
 
 #define TEXT_CHUNK_SIZE 256
+#define TAB_WIDTH 8
 
 #define CHAR_SIZE SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE
 #define LINE_HEIGHT ((int)(CHAR_SIZE * 1.5))
+
+typedef struct {
+	size_t size;
+	char *text;
+} String;
 
 typedef struct {
 	size_t text_size;
@@ -47,8 +58,6 @@ typedef struct Frame {
 	TextBuffer *buffer;
 } Frame;
 
-#define ASK_BUFFER_SIZE 0x1000
-
 typedef struct Ctx {
 	SDL_Renderer *renderer;
 	SDL_Window *window;
@@ -58,19 +67,27 @@ typedef struct Ctx {
 	const bool *keys;
 	const char *opened_file;
 	SDL_Keymod keymod;
+	SDL_FPoint mouse_pos;
 	bool running;
 	bool moving_col; // When cursor was just moving up and down
 	Uint32 frames_count;
 	Uint32 frames_capacity;
 	Frame *frames;
+	Uint32 *sorted_frames;
 	Uint32 focused_frame;
-	bool should_move_cursor;
-	SDL_FPoint mouse_cursor_pos;
 	SDL_FPoint transform;
 	Uint64 last_middle_click;
 } Ctx;
 
 static const SDL_Color text_color = {0xe6, 0xe6, 0xe6, SDL_ALPHA_OPAQUE};
+
+static inline Uint32 reverse_sorted_index(Ctx *ctx, Uint32 sorted_ind) {
+	for (Uint32 i = 0; i < ctx->frames_count; ++i) {
+		if (ctx->sorted_frames[i] == sorted_ind) return i;
+	}
+	SDL_assert(!"Sorted index out of bounds");
+	return -1;
+}
 
 static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, size_t in_len, Uint32 pos) {
 	(void)ctx;
@@ -95,16 +112,57 @@ static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, siz
 	buffer->text[buffer->text_size] = '\0';
 }
 
-#define TAB_WIDTH 8
+static inline Uint32 coords_to_text_index(Ctx *ctx, size_t text_length, char text[text_length], float pos) {
+	Uint32 visual_char, ind;
+	(void) ctx;
+	// [ ][ ][ ][ ][ ][ ][ ][ ][a][b][c]
+	//       | 2 before
+	// | 0 vis_char
+	//                      | 7 nvis_char
+	//                            | 9 after
+	visual_char = 0;
+	if (pos / CHAR_SIZE <= -0.4) return 0;
+	for (ind = 0; ind < text_length && text[ind] != '\0'; ++ind) {
+		float diff = (pos - (float)visual_char * CHAR_SIZE) / CHAR_SIZE;
+		if (text[ind] == '\t') {
+			visual_char += TAB_WIDTH;
+			if (diff <= TAB_WIDTH / 2 && diff >= -0.4) return ind;
+		} else {
+			visual_char += 1;
+			if (diff <= 0.6 && diff >= -0.4) return ind;
+		}
+	}
+	return ind - 1;
+}
 
-static Uint32 render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t len) {
+static inline bool get_frame_render_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
+	SDL_assert(bounds != NULL);
+	SDL_assert(ctx->frames_count >= frame);
+	SDL_FRect frame_bounds = ctx->frames[frame].bounds;
+	if (!ctx->frames[frame].is_global) {
+		frame_bounds.x += ctx->transform.x;
+		frame_bounds.y += ctx->transform.y;
+	}
+	*bounds = (SDL_FRect) {
+		.x = frame_bounds.x,
+		.y = frame_bounds.y,
+		.w = frame_bounds.w,
+		.h = frame_bounds.h,
+	};
+	return true;
+}
+
+static inline bool get_frame_render_lines_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
+	get_frame_render_rect(ctx, frame, bounds);
+	bounds->x += CHAR_SIZE * 4;
+	bounds->w -= CHAR_SIZE * 4;
+	return true;
+}
+
+static void render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t len) {
 	char tmp[1024];
-	Uint32 cursor_x = -1;
 	size_t out = 0;
 	for (size_t i = 0; i < len && out < sizeof(tmp) - 1 && out < frame.w / 8; ++i) {
-		if (((frame.x + (out) * CHAR_SIZE) <= ctx->mouse_cursor_pos.x + CHAR_SIZE * 0.3)) {
-			cursor_x = i;
-		}
 		if (buffer[i] == '\t') {
 			for (int s = 0; s < TAB_WIDTH && out < sizeof(tmp) - 1; ++s) {
 				tmp[out++] = ' ';
@@ -114,122 +172,96 @@ static Uint32 render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t 
 		}
 	}
 	tmp[out++] = '\0';
-	if (((frame.x + (out) * CHAR_SIZE) <= ctx->mouse_cursor_pos.x + CHAR_SIZE * 0.3)) {
-		cursor_x = len;
-	}
 	SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
 	SDL_RenderDebugText(ctx->renderer, SDL_floor(frame.x), SDL_floor(frame.y), tmp);
 #ifdef DEBUG_LAYOUT
 	SDL_SetRenderDrawColor(ctx->renderer, 0xff, 0x00, 0x00, 0xff);
 	SDL_RenderRect(ctx->renderer, &frame);
 #endif
-	return cursor_x;
+	return;
 }
 
-static void render_frame(Ctx *ctx, Uint32 frame, bool selected) {
-	int line = 0;
-	Frame *draw_frame = &ctx->frames[frame];
-	const char *text = draw_frame->buffer->text;
-	Uint32 length = draw_frame->buffer->text_size;
-	const char *start = text;
-	const char *end = start;
-	SDL_FRect offseted_bounds = (SDL_FRect) {
-			.x = draw_frame->bounds.x,
-			.y = draw_frame->bounds.y,
-			.w = draw_frame->bounds.w,
-			.h = draw_frame->bounds.h,
-	};
-	if (!draw_frame->is_global) {
-		offseted_bounds.x += ctx->transform.x;
-		offseted_bounds.y += ctx->transform.y;
+static Uint32 split_into_lines(Ctx *ctx, Uint32 strings_length, String strings[strings_length], char *text, Uint32 line_offset) {
+	(void)ctx;
+	char *end = text;
+	Sint32 line = -line_offset;
+	while (*end != '\0') {
+		if ((Sint32)strings_length <= line) break;
+		while (*end != '\0' && *end != '\n') end++;
+		if (line >= 0) {
+			strings[line] = (String) {
+				.size = end - text,
+				.text = text,
+			};
+		}
+		line += 1;
+		if (*end == '\0') break;
+		end += 1;
+		text = end;
 	}
+	if ((Sint32)strings_length > line && *end != '\0' && line >= 0) {
+		strings[line] = (String) {
+			.size = end - text,
+			.text = text,
+		};
+		line += 1;
+	}
+	return (Uint32)line;
+}
+
+static void render_frame(Ctx *ctx, Uint32 frame) {
+	String lines[0x100];
+	Frame *draw_frame = &ctx->frames[frame];
+	char *text = draw_frame->buffer->text;
+	SDL_FRect bounds, lines_bounds;
+	get_frame_render_rect(ctx, frame, &bounds);
+	get_frame_render_lines_rect(ctx, frame, &lines_bounds);
+	SDL_assert(SDL_arraysize(lines) >= (lines_bounds.h / LINE_HEIGHT));
 	SDL_SetRenderDrawColor(ctx->renderer, 0x12, 0x12, 0x12, SDL_ALPHA_OPAQUE);
 	SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
-		offseted_bounds.x,
-		offseted_bounds.y,
-		offseted_bounds.w,
-		offseted_bounds.h,
+		bounds.x,
+		bounds.y,
+		bounds.w,
+		bounds.h,
 	});
-	while (end - text <= length) {
-		if (line * LINE_HEIGHT + draw_frame->scroll.y > draw_frame->bounds.h) break;
-		while ((end - text < length) && *end != '\n') {
-			end++;
-		}
-		SDL_FRect line_bound = {
-			.x = offseted_bounds.x,
-			.y = offseted_bounds.y + line * LINE_HEIGHT + draw_frame->scroll.y,
-			.w = offseted_bounds.w,
+	Uint32 lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, text, 0);
+	for (Uint32 linenum = 0; linenum < lines_count; ++linenum) {
+		SDL_FRect line_bounds = {
+			.x = lines_bounds.x,
+			.y = lines_bounds.y + linenum * LINE_HEIGHT + draw_frame->scroll.y,
+			.w = lines_bounds.w,
 			.h = LINE_HEIGHT,
 		};
-		if (line * LINE_HEIGHT + draw_frame->scroll.y >= 0) {
-			Uint32 cursor_line_offset = render_line(ctx, line_bound, start, end - start);
-			if (cursor_line_offset == (Uint32)-1) {
-				cursor_line_offset = end - start;
-			}
-			if (ctx->should_move_cursor && SDL_PointInRectFloat(&ctx->mouse_cursor_pos, &line_bound)) {
-				draw_frame->cursor = start - text + cursor_line_offset;
-			}
-			if (draw_frame->cursor >= (start - draw_frame->buffer->text) && draw_frame->cursor <= (end - draw_frame->buffer->text)) {
-				int col = 0;
-				const char *cur = start;
-				while (draw_frame->cursor > (cur - draw_frame->buffer->text)) {
-					if (*cur == '\t') {
-						col += TAB_WIDTH;
-						cur++;
-					} else {
-						col++;
-						cur++;
-					}
-				}
-				SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
-				Uint32 cursor_width = selected ? 2 : CHAR_SIZE;
-				SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
-					.x = offseted_bounds.x + col * CHAR_SIZE,
-					.y = offseted_bounds.y + line * LINE_HEIGHT + draw_frame->scroll.y,
-					.w = cursor_width,
-					.h = LINE_HEIGHT,
-				});
-			}
-		}
-		start = end = end + 1;
-		if (end - text >= length) break;
-		line++;
-	}
-	if (ctx->should_move_cursor && SDL_PointInRectFloat(&ctx->mouse_cursor_pos, &(SDL_FRect) {
-		offseted_bounds.x,
-		offseted_bounds.y,
-		offseted_bounds.w,
-		offseted_bounds.h,
-	})) {
-		ctx->should_move_cursor = false;
-		ctx->focused_frame = frame;
+		String line = lines[linenum];
+		SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
+		render_line(ctx, line_bounds, line.text, line.size);
 	}
 #ifdef DEBUG_FILES
 	if (draw_frame->filename) {
 		SDL_SetRenderDrawColor(ctx->renderer, 0x20, 0x20, 0x20, SDL_ALPHA_OPAQUE);
 		SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
-			offseted_bounds.x + offseted_bounds.w - SDL_strlen(draw_frame->filename) * CHAR_SIZE,
-			offseted_bounds.y + offseted_bounds.h - LINE_HEIGHT,
+			bounds.x + bounds.w - SDL_strlen(draw_frame->filename) * CHAR_SIZE,
+			bounds.y + bounds.h - LINE_HEIGHT,
 			SDL_strlen(draw_frame->filename) * CHAR_SIZE,
 			LINE_HEIGHT,
 		});
 		SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
 		SDL_RenderDebugText(ctx->renderer,
-			offseted_bounds.x + offseted_bounds.w - SDL_strlen(draw_frame->filename) * CHAR_SIZE,
-			offseted_bounds.y + offseted_bounds.h - LINE_HEIGHT,
+			bounds.x + bounds.w - SDL_strlen(draw_frame->filename) * CHAR_SIZE,
+			bounds.y + bounds.h - LINE_HEIGHT,
 			draw_frame->filename);
 	}
 #endif
-	if (selected) {
+	if (ctx->focused_frame == frame) {
 		SDL_SetRenderDrawColor(ctx->renderer, 0x08, 0x38, 0x08, SDL_ALPHA_OPAQUE);
 	} else {
 		SDL_SetRenderDrawColor(ctx->renderer, 0x08, 0x08, 0x08, SDL_ALPHA_OPAQUE);
 	}
 	SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
-		offseted_bounds.x,
-		offseted_bounds.y,
-		offseted_bounds.w,
-		offseted_bounds.h,
+		bounds.x,
+		bounds.y,
+		bounds.w,
+		bounds.h,
 	});
 }
 
@@ -254,11 +286,16 @@ static Uint32 append_frame(Ctx *ctx, TextBuffer *buffer, SDL_FRect bounds) {
 		Frame *new_frames = SDL_realloc(ctx->frames, new_cap * (sizeof *ctx->frames));
 		if (new_frames == NULL) {
 			SDL_Log("Can't reallocate frames array");
-#ifdef DEBUG
-#endif
+			return -1;
+		}
+		Uint32 *new_sorted_frames = SDL_realloc(ctx->frames, new_cap * (sizeof *ctx->sorted_frames));
+		if (new_sorted_frames == NULL) {
+			SDL_LogWarn(0, "Can't reallocate sorted frames index");
+			SDL_realloc(ctx->frames, ctx->frames_count * (sizeof *ctx->frames));
 			return -1;
 		}
 		ctx->frames = new_frames;
+		ctx->sorted_frames = new_sorted_frames;
 		ctx->frames_capacity = new_cap;
 	}
 	Uint32 frame_ind = ctx->frames_count++;
@@ -269,6 +306,7 @@ static Uint32 append_frame(Ctx *ctx, TextBuffer *buffer, SDL_FRect bounds) {
 		.bounds = bounds,
 		.buffer = buffer,
 	};
+	ctx->sorted_frames[frame_ind] = frame_ind;
 	return frame_ind;
 }
 
@@ -536,8 +574,19 @@ int main(int argc, char *argv[argc]) {
 						if (ctx.keymod & SDL_KMOD_CTRL) {
 						} else if (ctx.keymod & SDL_KMOD_ALT) {
 						} else {
-							ctx.should_move_cursor = true;
-							ctx.mouse_cursor_pos = (SDL_FPoint){ev.button.x, ev.button.y};
+							for (Uint32 i = 0; i < ctx.frames_count; ++i) {
+								SDL_FRect bounds;
+								SDL_FPoint point = {ev.button.x, ev.button.y};
+								get_frame_render_rect(&ctx, ctx.sorted_frames[i], &bounds);
+								if (SDL_PointInRectFloat(&point, &bounds)) {
+									ctx.focused_frame = ctx.sorted_frames[i];
+									Uint32 first = ctx.sorted_frames[i];
+									if (i != 0)
+										SDL_memmove(&ctx.sorted_frames[1], &ctx.sorted_frames[0], i * sizeof (*ctx.sorted_frames));
+									ctx.sorted_frames[0] = first;
+									break;
+								}
+							}
 						}
 					} else if (ev.button.button == SDL_BUTTON_MIDDLE) {
 						Uint64 time = SDL_GetTicks();
@@ -548,6 +597,8 @@ int main(int argc, char *argv[argc]) {
 					}
 				}; break;
 				case SDL_EVENT_MOUSE_MOTION: {
+					ctx.mouse_pos.x = ev.motion.x;
+					ctx.mouse_pos.y = ev.motion.y;
 					if (ev.motion.state & SDL_BUTTON_MMASK) {
 						ctx.transform.x += ev.motion.xrel;
 						ctx.transform.y += ev.motion.yrel;
@@ -588,10 +639,17 @@ int main(int argc, char *argv[argc]) {
 		if (!ctx.running) break;
 		SDL_SetRenderDrawColor(ctx.renderer, 0x04, 0x04, 0x04, 0xff);
 		SDL_RenderClear(ctx.renderer);
-		for (Uint32 i = 0; i < ctx.frames_count; ++i) {
-			if (!ctx.frames[i].taken) continue;
-			render_frame(&ctx, i, ctx.focused_frame == i);
+		for (Uint32 i = ctx.frames_count - 1; i != (Uint32)-1; --i) {
+			Uint32 sorted_frame = ctx.sorted_frames[i];
+			if (!ctx.frames[sorted_frame].taken) continue;
+			render_frame(&ctx, sorted_frame);
 		}
+#ifdef DEBUG_SORT
+		for (Uint32 i = 0; i < ctx.frames_count; ++i) {
+			SDL_SetRenderDrawColor(ctx.renderer, 0x00, 0xff, 0xff, 0xff);
+			SDL_RenderDebugTextFormat(ctx.renderer, 400, LINE_HEIGHT * i, "%" SDL_PRIu32 " %" SDL_PRIu32, i, ctx.sorted_frames[i]);
+		}
+#endif
 		SDL_RenderPresent(ctx.renderer);
 	}
 #ifdef DEBUG
