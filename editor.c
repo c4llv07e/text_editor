@@ -155,7 +155,6 @@ static inline bool get_frame_render_rect(Ctx *ctx, Uint32 frame, SDL_FRect *boun
 static inline bool get_frame_render_lines_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
 	get_frame_render_rect(ctx, frame, bounds);
 	bounds->x += CHAR_SIZE * 4;
-			if (diff <= TAB_WIDTH / 2 + 0.6 && diff >= TAB_WIDTH / 2 - 0.4) return ind + 1;
 	bounds->w -= CHAR_SIZE * 4;
 	return true;
 }
