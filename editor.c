@@ -248,6 +248,15 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		String line = lines[linenum];
 		SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
 		render_line(ctx, line_bounds, line.text, line.size);
+		if (line.text - text <= draw_frame->cursor &&
+			((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->cursor))) {
+			SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
+				.x = line_bounds.x + (draw_frame->cursor - (line.text - text)) * CHAR_SIZE,
+				.y = line_bounds.y,
+				.w = 2,
+				.h = LINE_HEIGHT,
+			});
+		}
 	}
 #ifdef DEBUG_FILES
 	if (draw_frame->filename) {
