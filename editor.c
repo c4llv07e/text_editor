@@ -93,7 +93,6 @@ static inline Uint32 reverse_sorted_index(Ctx *ctx, Uint32 sorted_ind) {
 }
 
 static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, size_t in_len, Uint32 pos) {
-	(void)ctx;
 	if (in_len == 0) return;
 	if (pos > buffer->text_size) pos = buffer->text_size;
 	size_t new_size = (size_t)buffer->text_size + in_len;
@@ -113,6 +112,7 @@ static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, siz
 	SDL_memcpy(buffer->text + pos, in, in_len);
 	buffer->text_size = (Uint32)new_size;
 	buffer->text[buffer->text_size] = '\0';
+	ctx->should_render = true;
 }
 
 static inline Uint32 coords_to_text_index(Ctx *ctx, size_t text_length, char text[text_length], float pos) {
@@ -545,12 +545,15 @@ int main(int argc, char *argv[argc]) {
 								char nl = '\n';
 								if (current_frame->frame_type == Frame_Type_ask) {
 									if (current_frame->ask_option == Ask_Option_save) {
-										ctx.frames[current_frame->parent_frame].filename =
+										Frame *parent_frame = &ctx.frames[current_frame->parent_frame];
+										parent_frame->filename =
 											SDL_strndup(current_frame->buffer->text, current_frame->buffer->text_size);
 										current_frame->taken = false;
 										ctx.focused_frame = current_frame->parent_frame;
 										current_frame = &ctx.frames[ctx.focused_frame];
-										SDL_assert_release(0 && "TODO");
+										SDL_SaveFile(current_frame->filename, current_frame->buffer->text, current_frame->buffer->text_size);
+										SDL_LogInfo(0, "Saved buffer into %s", current_frame->filename);
+										ctx.should_render = true;
 									} else if (current_frame->ask_option == Ask_Option_open) {
 										Frame *parent_frame = &ctx.frames[current_frame->parent_frame];
 										parent_frame->filename =
@@ -636,14 +639,19 @@ int main(int argc, char *argv[argc]) {
 							}; break;
 							case SDL_SCANCODE_S: {
 								if (ctx.keymod & SDL_KMOD_CTRL) {
-									Uint32 ask_frame = create_ask_frame(&ctx, Ask_Option_save, ctx.focused_frame);
-									if (ask_frame == (Uint32)-1) {
-										SDL_Log("Error, can't open ask frame");
-										break;
+									if (current_frame->filename == NULL || ctx.keymod & SDL_KMOD_SHIFT) {
+										Uint32 ask_frame = create_ask_frame(&ctx, Ask_Option_save, ctx.focused_frame);
+										if (ask_frame == (Uint32)-1) {
+											SDL_Log("Error, can't open ask frame");
+											break;
+										}
+										ctx.focused_frame = ask_frame;
+										current_frame = &ctx.frames[ctx.focused_frame];
+										ctx.should_render = true;
+									} else {
+										SDL_SaveFile(current_frame->filename, current_frame->buffer->text, current_frame->buffer->text_size);
+										SDL_LogInfo(0, "Saved buffer into %s", current_frame->filename);
 									}
-									ctx.focused_frame = ask_frame;
-									current_frame = &ctx.frames[ctx.focused_frame];
-									ctx.should_render = true;
 								}
 							}; break;
 							case SDL_SCANCODE_B: {
