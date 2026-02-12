@@ -91,6 +91,17 @@ static inline Uint32 reverse_sorted_index(Ctx *ctx, Uint32 sorted_ind) {
 	return -1;
 }
 
+static inline Uint32 count_lines(Ctx *ctx, size_t text_size, char text[text_size]) {
+	Uint32 lines = 1;
+	(void) ctx;
+	if (text_size == 0) return 0;
+	for (Uint32 i = 0; i < text_size; ++i) {
+		if (text[i] == '\0') return lines;
+		if (text[i] == '\n') lines += 1;
+	}
+	return lines;
+}
+
 static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, size_t in_len, Uint32 pos) {
 	if (in_len == 0) return;
 	if (pos > buffer->text_size) pos = buffer->text_size;
@@ -111,6 +122,16 @@ static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, siz
 	SDL_memcpy(buffer->text + pos, in, in_len);
 	buffer->text_size = (Uint32)new_size;
 	buffer->text[buffer->text_size] = '\0';
+	for (Uint32 i = 0; i < ctx->frames_count; ++i) {
+		if (!ctx->frames[i].taken) continue;
+		if (ctx->frames[i].buffer == buffer && !ctx->frames[i].scroll_lock) {
+			Sint32 text_lines = (Sint32)count_lines(ctx, buffer->text_size, buffer->text);
+			Sint32 buffer_last_line = (Sint32)SDL_ceil((ctx->frames[i].bounds.h - ctx->frames[i].scroll.y) / LINE_HEIGHT);
+			if (text_lines > buffer_last_line) {
+				ctx->frames[i].scroll.y = ctx->frames[i].bounds.h - text_lines * LINE_HEIGHT;
+			}
+		}
+	}
 	ctx->should_render = true;
 }
 
@@ -483,7 +504,7 @@ int main(int argc, char *argv[argc]) {
 	if (log_frame == (Uint32)-1) {
 		SDL_LogError(0, "Can't create log frame");
 	}
-	// SDL_SetLogOutputFunction(log_handler, &ctx);
+	SDL_SetLogOutputFunction(log_handler, &ctx);
 	Uint64 window_flags = SDL_WINDOW_RESIZABLE;
 	if (!SDL_CreateWindowAndRenderer("test", ctx.win_w, ctx.win_h, window_flags, &ctx.window, &ctx.renderer)) {
 		SDL_Log("Error, can't init renderer: %s", SDL_GetError());
