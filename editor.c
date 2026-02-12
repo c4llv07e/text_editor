@@ -82,6 +82,7 @@ typedef struct Ctx {
 } Ctx;
 
 static const SDL_Color text_color = {0xe6, 0xe6, 0xe6, SDL_ALPHA_OPAQUE};
+static const SDL_Color line_number_color = {0xe6 / 2, 0xe6 / 2, 0xe6 / 2, SDL_ALPHA_OPAQUE};
 
 static inline Uint32 reverse_sorted_index(Ctx *ctx, Uint32 sorted_ind) {
 	for (Uint32 i = 0; i < ctx->frames_count; ++i) {
@@ -195,6 +196,12 @@ static inline bool get_frame_render_lines_rect(Ctx *ctx, Uint32 frame, SDL_FRect
 	return true;
 }
 
+static inline bool get_frame_render_lines_numbers_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
+	get_frame_render_rect(ctx, frame, bounds);
+	bounds->w = CHAR_SIZE * 4;
+	return true;
+}
+
 static void render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t len) {
 	char tmp[1024];
 	size_t out = 0;
@@ -275,9 +282,10 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	String lines[0x100];
 	Frame *draw_frame = &ctx->frames[frame];
 	char *text = draw_frame->buffer->text;
-	SDL_FRect bounds, lines_bounds;
+	SDL_FRect bounds, lines_bounds, lines_numbers_bounds;
 	get_frame_render_rect(ctx, frame, &bounds);
 	get_frame_render_lines_rect(ctx, frame, &lines_bounds);
+	get_frame_render_lines_numbers_rect(ctx, frame, &lines_numbers_bounds);
 	SDL_assert(SDL_arraysize(lines) >= (lines_bounds.h / LINE_HEIGHT));
 	SDL_SetRenderDrawColor(ctx->renderer, 0x12, 0x12, 0x12, SDL_ALPHA_OPAQUE);
 	SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
@@ -306,6 +314,11 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 				.h = LINE_HEIGHT,
 			});
 		}
+	}
+	for (Uint32 linenum = 0; linenum < (lines_numbers_bounds.h - draw_frame->scroll.y) / LINE_HEIGHT; ++linenum) {
+		SDL_SetRenderDrawColor(ctx->renderer, line_number_color.r, line_number_color.g, line_number_color.b, line_number_color.a);
+		SDL_RenderDebugTextFormat(ctx->renderer, lines_numbers_bounds.x, lines_numbers_bounds.y + linenum * LINE_HEIGHT + draw_frame->scroll.y,
+				"%u", linenum);
 	}
 #ifdef DEBUG_FILES
 	if (draw_frame->filename) {
