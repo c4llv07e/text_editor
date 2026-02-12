@@ -315,6 +315,35 @@ static TextBuffer *allocate_buffer(Ctx *ctx) {
 	return buffer;
 }
 
+static void set_focused_frame(Ctx *ctx, Uint32 frame) {
+	ctx->focused_frame = frame;
+	Uint32 first = frame;
+	Uint32 sorted_ind = reverse_sorted_index(ctx, frame);
+	if (sorted_ind != 0)
+		SDL_memmove(&ctx->sorted_frames[1], &ctx->sorted_frames[0], sorted_ind * sizeof (*ctx->sorted_frames));
+	ctx->sorted_frames[0] = first;
+}
+
+static bool handle_frame_mouse_click(Ctx *ctx, Uint32 frame, SDL_FPoint point) {
+	SDL_FRect bounds;
+	Frame *draw_frame = &ctx->frames[frame];
+	get_frame_render_lines_rect(ctx, frame, &bounds);
+	if (point.y < bounds.y) {
+		draw_frame->cursor = 0;
+		return false;
+	}
+	Uint32 linenum = (point.y - bounds.y) / LINE_HEIGHT;
+	String line = get_line(ctx, draw_frame->buffer->text_size, draw_frame->buffer->text, (Uint32)linenum);
+	if (line.text == NULL) {
+		draw_frame->cursor = draw_frame->buffer->text_size;
+		return false;
+	}
+	// Don't fucking reallocate sized strings which only point is zero copy.
+	SDL_assert(line.text >= draw_frame->buffer->text && line.text <= draw_frame->buffer->text + draw_frame->buffer->text_size);
+	draw_frame->cursor = line.text - draw_frame->buffer->text + coords_to_text_index(ctx, line.size, line.text, point.x - bounds.x);
+	return true;
+}
+
 static Uint32 append_frame(Ctx *ctx, TextBuffer *buffer, SDL_FRect bounds) {
 	if (ctx->frames_capacity <= ctx->frames_count) {
 		size_t new_cap = ctx->frames_capacity * 2;
@@ -608,39 +637,33 @@ int main(int argc, char *argv[argc]) {
 					}
 				}; break;
 				case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+					SDL_FPoint point = {ev.button.x, ev.button.y};
 					if (ev.button.button == SDL_BUTTON_LEFT) {
 						if (ctx.keymod & SDL_KMOD_CTRL) {
 						} else if (ctx.keymod & SDL_KMOD_ALT) {
 						} else {
 							for (Uint32 i = 0; i < ctx.frames_count; ++i) {
+								if (ctx.frames[ctx.sorted_frames[i]].is_global) continue;
 								SDL_FRect bounds;
-								SDL_FPoint point = {ev.button.x, ev.button.y};
 								get_frame_render_rect(&ctx, ctx.sorted_frames[i], &bounds);
 								if (SDL_PointInRectFloat(&point, &bounds)) {
-									ctx.focused_frame = ctx.sorted_frames[i];
-									Uint32 first = ctx.sorted_frames[i];
-									if (i != 0)
-										SDL_memmove(&ctx.sorted_frames[1], &ctx.sorted_frames[0], i * sizeof (*ctx.sorted_frames));
-									ctx.sorted_frames[0] = first;
-									SDL_FRect bounds;
-									Frame *frame = &ctx.frames[first];
-									get_frame_render_lines_rect(&ctx, first, &bounds);
-									if (ev.button.y < bounds.y) {
-										frame->cursor = 0;
-										break;
-									}
-									Uint32 linenum = (ev.button.y - bounds.y) / LINE_HEIGHT;
-									String line = get_line(&ctx, frame->buffer->text_size, frame->buffer->text, (Uint32)linenum);
-									if (line.text == NULL) {
-										frame->cursor = frame->buffer->text_size;
-										break;
-									}
-									// Don't fucking reallocate sized strings which only point is zero copy.
-									SDL_assert(line.text >= frame->buffer->text && line.text <= frame->buffer->text + frame->buffer->text_size);
-									frame->cursor = line.text - frame->buffer->text + coords_to_text_index(&ctx, line.size, line.text, ev.button.x - bounds.x);
-									break;
+									set_focused_frame(&ctx, ctx.sorted_frames[i]);
+									handle_frame_mouse_click(&ctx, ctx.sorted_frames[i], point);
+									goto end;
 								}
 							}
+							for (Uint32 i = 0; i < ctx.frames_count; ++i) {
+								if (!ctx.frames[ctx.sorted_frames[i]].is_global) continue;
+								SDL_FRect bounds;
+								get_frame_render_rect(&ctx, ctx.sorted_frames[i], &bounds);
+								if (SDL_PointInRectFloat(&point, &bounds)) {
+									set_focused_frame(&ctx, ctx.sorted_frames[i]);
+									handle_frame_mouse_click(&ctx, ctx.sorted_frames[i], point);
+									goto end;
+								}
+							}
+							end:
+							break;
 						}
 					} else if (ev.button.button == SDL_BUTTON_MIDDLE) {
 						Uint64 time = SDL_GetTicks();
@@ -696,6 +719,14 @@ int main(int argc, char *argv[argc]) {
 		for (Uint32 i = ctx.frames_count - 1; i != (Uint32)-1; --i) {
 			Uint32 sorted_frame = ctx.sorted_frames[i];
 			if (!ctx.frames[sorted_frame].taken) continue;
+			if (ctx.frames[sorted_frame].is_global) continue;
+			render_frame(&ctx, sorted_frame);
+		}
+		// First render default frames, then global, so global always on top
+		for (Uint32 i = ctx.frames_count - 1; i != (Uint32)-1; --i) {
+			Uint32 sorted_frame = ctx.sorted_frames[i];
+			if (!ctx.frames[sorted_frame].taken) continue;
+			if (!ctx.frames[sorted_frame].is_global) continue;
 			render_frame(&ctx, sorted_frame);
 		}
 #ifdef DEBUG_SORT

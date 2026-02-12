@@ -5,3 +5,4 @@
 - Fix cursor not drawing if last empty line
 - Add ref counter to buffers
 	- Opening file should create new buffer, not override current
+- Make it renders itself after event, not every frame
