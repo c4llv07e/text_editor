@@ -359,7 +359,7 @@ static Uint32 append_frame(Ctx *ctx, TextBuffer *buffer, SDL_FRect bounds) {
 			SDL_Log("Can't reallocate frames array");
 			return -1;
 		}
-		Uint32 *new_sorted_frames = SDL_realloc(ctx->frames, new_cap * (sizeof *ctx->sorted_frames));
+		Uint32 *new_sorted_frames = SDL_realloc(ctx->sorted_frames, new_cap * (sizeof *ctx->sorted_frames));
 		if (new_sorted_frames == NULL) {
 			SDL_LogWarn(0, "Can't reallocate sorted frames index");
 			SDL_realloc(ctx->frames, ctx->frames_count * (sizeof *ctx->frames));
