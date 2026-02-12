@@ -707,22 +707,24 @@ int main(int argc, char *argv[argc]) {
 							} else if (ctx.keymod & SDL_KMOD_ALT) {
 							} else {
 								for (Uint32 i = 0; i < ctx.frames_count; ++i) {
-									if (ctx.frames[ctx.sorted_frames[i]].is_global) continue;
+									Uint32 sframei = ctx.sorted_frames[i];
+									if (ctx.frames[sframei].is_global) continue;
 									SDL_FRect bounds;
-									get_frame_render_rect(&ctx, ctx.sorted_frames[i], &bounds);
+									get_frame_render_rect(&ctx, sframei, &bounds);
 									if (SDL_PointInRectFloat(&point, &bounds)) {
-										set_focused_frame(&ctx, ctx.sorted_frames[i]);
-										handle_frame_mouse_click(&ctx, ctx.sorted_frames[i], point);
+										set_focused_frame(&ctx, sframei);
+										handle_frame_mouse_click(&ctx, sframei, point);
 										goto end;
 									}
 								}
 								for (Uint32 i = 0; i < ctx.frames_count; ++i) {
-									if (!ctx.frames[ctx.sorted_frames[i]].is_global) continue;
+									Uint32 sframei = ctx.sorted_frames[i];
+									if (!ctx.frames[sframei].is_global) continue;
 									SDL_FRect bounds;
-									get_frame_render_rect(&ctx, ctx.sorted_frames[i], &bounds);
+									get_frame_render_rect(&ctx, sframei, &bounds);
 									if (SDL_PointInRectFloat(&point, &bounds)) {
-										set_focused_frame(&ctx, ctx.sorted_frames[i]);
-										handle_frame_mouse_click(&ctx, ctx.sorted_frames[i], point);
+										set_focused_frame(&ctx, sframei);
+										handle_frame_mouse_click(&ctx, sframei, point);
 										goto end;
 									}
 								}
