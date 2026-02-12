@@ -66,6 +66,7 @@ typedef struct Ctx {
 	int linebar_length;
 	const bool *keys;
 	const char *opened_file;
+	TextBuffer *log_buffer;
 	SDL_Keymod keymod;
 	SDL_FPoint mouse_pos;
 	Uint64 last_render;
@@ -410,6 +411,14 @@ static Uint32 create_ask_frame(Ctx *ctx, Ask_Option option, Uint32 parent) {
 	return frame;
 }
 
+static void log_handler(void *userdata, int category, SDL_LogPriority priority, const char *message) {
+	(void) category;
+	(void) priority;
+	Ctx *ctx = (Ctx *)userdata;
+	buffer_insert_text(ctx, ctx->log_buffer, message, SDL_strlen(message), ctx->log_buffer->text_size);
+	buffer_insert_text(ctx, ctx->log_buffer, "\n", 1, ctx->log_buffer->text_size);
+}
+
 static void render(Ctx *ctx) {
 	SDL_SetRenderDrawColor(ctx->renderer, 0x04, 0x04, 0x04, 0xff);
 	SDL_RenderClear(ctx->renderer);
@@ -449,11 +458,21 @@ int main(int argc, char *argv[argc]) {
 		SDL_Log("Error, can't allocate first buffer");
 		return -1;
 	}
-	Uint32 main_frame = append_frame(&ctx, buffer, (SDL_FRect){0, 0, 0x300, 0x200});
+	Uint32 main_frame = append_frame(&ctx, buffer, (SDL_FRect){0, 0, 0x300 / 2, 0x200});
 	if (main_frame == (Uint32)-1) {
 		SDL_Log("Error, can't create first frame");
 		return -1;
 	}
+	ctx.log_buffer = allocate_buffer(&ctx);
+	if (ctx.log_buffer == NULL) {
+		SDL_LogError(0, "Can't create buffer for logs");
+		return -1;
+	}
+	Uint32 log_frame = append_frame(&ctx, ctx.log_buffer, (SDL_FRect){0x300 / 2, 0, 0x300 / 2, 0x200});
+	if (log_frame == (Uint32)-1) {
+		SDL_LogError(0, "Can't create log frame");
+	}
+	SDL_SetLogOutputFunction(log_handler, &ctx);
 	ctx.keys = NULL;
 	ctx.linebar_length = 3;
 	ctx.opened_file = NULL;
@@ -752,7 +771,6 @@ int main(int argc, char *argv[argc]) {
 						ctx.should_render = true;
 					}; break;
 					case SDL_EVENT_WINDOW_EXPOSED: {
-						SDL_Log("test");
 						ctx.should_render = 1;
 					} break;
 				}
