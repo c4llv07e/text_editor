@@ -200,6 +200,7 @@ static void render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t le
 static String get_line(Ctx *ctx, size_t text_size, char text[text_size], Uint32 linenum) {
 	char *begin = text;
 	(void) ctx;
+	if (text_size == 0) return (String){0};
 	while (linenum != 0) {
 		if (*begin == '\0') return (String){0};
 		if (*begin == '\n') linenum -= 1;
