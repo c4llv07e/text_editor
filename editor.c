@@ -63,9 +63,7 @@ typedef struct Ctx {
 	SDL_Window *window;
 	Uint32 last_row;
 	int win_w, win_h;
-	int linebar_length;
-	const bool *keys;
-	const char *opened_file;
+	bool keys[SDL_SCANCODE_COUNT];
 	TextBuffer *log_buffer;
 	SDL_Keymod keymod;
 	SDL_FPoint mouse_pos;
@@ -474,10 +472,7 @@ int main(int argc, char *argv[argc]) {
 		SDL_LogError(0, "Can't create log frame");
 	}
 	SDL_SetLogOutputFunction(log_handler, &ctx);
-	ctx.keys = NULL;
-	ctx.linebar_length = 3;
-	ctx.opened_file = NULL;
-	Uint64 window_flags =  SDL_WINDOW_RESIZABLE;
+	Uint64 window_flags = SDL_WINDOW_RESIZABLE;
 	if (!SDL_CreateWindowAndRenderer("test", 0x300, 0x200, window_flags, &ctx.window, &ctx.renderer)) {
 		SDL_Log("Error, can't init renderer: %s", SDL_GetError());
 		return -1;
@@ -707,6 +702,16 @@ int main(int argc, char *argv[argc]) {
 							}; break;
 							default: {};
 						}
+						SDL_Scancode scancode = ev.key.scancode;
+						if (scancode > SDL_SCANCODE_UNKNOWN && scancode < SDL_SCANCODE_COUNT) {
+							ctx.keys[scancode] = ev.type == SDL_EVENT_KEY_DOWN;
+						}
+					} break;
+					case SDL_EVENT_KEY_UP: {
+						SDL_Scancode scancode = ev.key.scancode;
+						if (scancode > SDL_SCANCODE_UNKNOWN && scancode < SDL_SCANCODE_COUNT) {
+							ctx.keys[scancode] = ev.type == SDL_EVENT_KEY_DOWN;
+						}
 					}; break;
 					case SDL_EVENT_MOUSE_BUTTON_DOWN: {
 						SDL_FPoint point = {ev.button.x, ev.button.y};
@@ -781,8 +786,14 @@ int main(int argc, char *argv[argc]) {
 						current_frame->cursor += SDL_strlen(ev.text.text);
 						ctx.should_render = true;
 					}; break;
+					case SDL_EVENT_WINDOW_RESIZED: {
+						ctx.win_w = ev.window.data1;
+						ctx.win_h = ev.window.data2;
+						SDL_LogDebug(0, "Window resized to %ux%u", ctx.win_w, ctx.win_h);
+					} break;
 					case SDL_EVENT_WINDOW_EXPOSED: {
 						ctx.should_render = 1;
+						SDL_LogTrace(0, "Window exposed");
 					} break;
 				}
 			}
@@ -790,13 +801,6 @@ int main(int argc, char *argv[argc]) {
 		if (!SDL_TextInputActive(ctx.window)) {
 			SDL_StartTextInput(ctx.window);
 		}
-		if (!SDL_GetWindowSize(ctx.window, &ctx.win_w, &ctx.win_h)) {
-			SDL_Log("Can't get window properties: %s", SDL_GetError());
-			// Maybe exiting right away isn't required, but I don't know what should happened so SDL couldn't get window size
-			ctx.running = false;
-			return -1;
-		}
-		ctx.keys = SDL_GetKeyboardState(NULL);
 		ctx.keymod = SDL_GetModState();
 		if (!ctx.running) break;
 		// if (SDL_GetTicks() - ctx.last_render >= 1000) ctx.should_render = true;

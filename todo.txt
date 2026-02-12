@@ -1,10 +1,8 @@
 - Use SDL Utf8 support
-- Utilize full SDL logging support (levels, types and prefixes)
 - Fix memory leaks in save/open files
 - Handle save/open errors
-- Fix cursor not drawing if last empty line
+- Fix cursor not drawing if empty buffer
 - Add ref counter to buffers
 	- Opening file should create new buffer, not override current
-- Make it renders itself after event, not every frame
 - Switch to SDL Main callbacks
-- Replace SDL_GetWindowSize, SDL_GetKeyboardState and SDL_GetModState with events
+- Replace SDL_GetModState with event
