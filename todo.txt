@@ -1,7 +1,6 @@
 - Use SDL Utf8 support
 - Fix memory leaks in save/open files
 - Handle save/open errors
-- Fix cursor not drawing if empty buffer
 - Add ref counter to buffers
 	- Opening file should create new buffer, not override current
 - Switch to SDL Main callbacks

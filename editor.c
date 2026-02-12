@@ -47,6 +47,7 @@ typedef enum {
 typedef struct Frame {
 	bool taken;
 	bool is_global;
+	bool scroll_lock;
 	Frame_Type frame_type;
 	Uint32 parent_frame;
 	Ask_Option ask_option;
@@ -212,8 +213,16 @@ static String get_line(Ctx *ctx, size_t text_size, char text[text_size], Uint32 
 static Uint32 split_into_lines(Ctx *ctx, Uint32 strings_length, String strings[strings_length], char *text, Uint32 line_offset) {
 	(void)ctx;
 	char *end = text;
+	char *last = text - 1;
 	Sint32 line = -line_offset;
 	if (text == NULL) {
+		if (line >= 0) {
+			strings[line] = (String) {
+				.size = 0,
+				.text = text,
+			};
+			return 1;
+		}
 		return 0;
 	}
 	while (*end != '\0') {
@@ -225,12 +234,13 @@ static Uint32 split_into_lines(Ctx *ctx, Uint32 strings_length, String strings[s
 				.text = text,
 			};
 		}
+		last = end;
 		line += 1;
 		if (*end == '\0') break;
 		end += 1;
 		text = end;
 	}
-	if ((Sint32)strings_length > line && *end != '\0' && line >= 0) {
+	if ((Sint32)strings_length > line && last != end && line >= 0) {
 		strings[line] = (String) {
 			.size = end - text,
 			.text = text,
@@ -447,6 +457,8 @@ static void render(Ctx *ctx) {
 int main(int argc, char *argv[argc]) {
 	(void)argv;
 	Ctx ctx = {0};
+	ctx.win_w = 0x300;
+	ctx.win_h = 0x200;
 	SDL_SetAppMetadata("Text editor", "1.0", "c4ll.text-editor");
 	if (!SDL_Init(SDL_INIT_VIDEO)) {
 		SDL_LogError(0, "Couldn't initialize SDL: %s", SDL_GetError());
@@ -471,9 +483,9 @@ int main(int argc, char *argv[argc]) {
 	if (log_frame == (Uint32)-1) {
 		SDL_LogError(0, "Can't create log frame");
 	}
-	SDL_SetLogOutputFunction(log_handler, &ctx);
+	// SDL_SetLogOutputFunction(log_handler, &ctx);
 	Uint64 window_flags = SDL_WINDOW_RESIZABLE;
-	if (!SDL_CreateWindowAndRenderer("test", 0x300, 0x200, window_flags, &ctx.window, &ctx.renderer)) {
+	if (!SDL_CreateWindowAndRenderer("test", ctx.win_w, ctx.win_h, window_flags, &ctx.window, &ctx.renderer)) {
 		SDL_Log("Error, can't init renderer: %s", SDL_GetError());
 		return -1;
 	}
@@ -484,12 +496,6 @@ int main(int argc, char *argv[argc]) {
 	const char *text = "int main(void) {\n\treturn 0;\n}\n";
 	buffer_insert_text(&ctx, buffer, text, strlen(text), 0);
 	ctx.frames[ctx.focused_frame].cursor = strlen(text);
-	text = "aaaaaaa\n";
-	buffer_insert_text(&ctx, buffer, text, strlen(text), 0);
-	text = "aa\n";
-	buffer_insert_text(&ctx, buffer, text, strlen(text), 0);
-	text = "aaaaaaa\n";
-	buffer_insert_text(&ctx, buffer, text, strlen(text), 0);
 #endif
 	ctx.running = true;
 	ctx.should_render = true;
