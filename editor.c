@@ -297,7 +297,8 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		bounds.h,
 	});
 	Uint32 lines_count;
-	lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, text, SDL_max(0, SDL_floor(-ctx->frames[frame].scroll.y / LINE_HEIGHT)));
+	Uint32 line_start = SDL_max(0, SDL_floor(-ctx->frames[frame].scroll.y / LINE_HEIGHT));
+	lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, text, line_start);
 	for (Uint32 linenum = 0; linenum < lines_count; ++linenum) {
 		SDL_FRect line_bounds = {
 			.x = lines_bounds.x,
@@ -319,9 +320,9 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			});
 		}
 	}
-	for (Uint32 linenum = 0; linenum < (lines_numbers_bounds.h - draw_frame->scroll.y) / LINE_HEIGHT; ++linenum) {
+	for (Uint32 linenum = line_start; (linenum - line_start) < ((lines_numbers_bounds.h) / LINE_HEIGHT); ++linenum) {
 		SDL_SetRenderDrawColor(ctx->renderer, line_number_color.r, line_number_color.g, line_number_color.b, line_number_color.a);
-		SDL_RenderDebugTextFormat(ctx->renderer, lines_numbers_bounds.x, lines_numbers_bounds.y + linenum * LINE_HEIGHT + draw_frame->scroll.y,
+		SDL_RenderDebugTextFormat(ctx->renderer, lines_numbers_bounds.x, lines_numbers_bounds.y + (linenum - line_start) * LINE_HEIGHT,
 				"%u", linenum);
 	}
 #ifdef DEBUG_FILES
