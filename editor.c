@@ -836,14 +836,15 @@ int main(int argc, char *argv[argc]) {
 						current_frame->cursor += SDL_strlen(ev.text.text);
 						ctx.should_render = true;
 					}; break;
-					case SDL_EVENT_WINDOW_RESIZED: {
+					case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
 						ctx.win_w = ev.window.data1;
 						ctx.win_h = ev.window.data2;
 						SDL_LogDebug(0, "Window resized to %ux%u", ctx.win_w, ctx.win_h);
+						ctx.should_render = 1;
 					} break;
 					case SDL_EVENT_WINDOW_EXPOSED: {
-						ctx.should_render = 1;
 						SDL_LogTrace(0, "Window exposed");
+						ctx.should_render = 1;
 					} break;
 				}
 			}
