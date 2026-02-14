@@ -132,6 +132,16 @@ static inline Uint32 reverse_sorted_index(Ctx *ctx, Uint32 sorted_ind) {
 	return -1;
 }
 
+static inline bool is_space_only(Ctx *ctx, size_t text_length, const char text[text_length]) {
+	(void) ctx;
+	if (text_length == 0) return true;
+	for (size_t i = 0; i < text_length; ++i) {
+		if (text[i] == '\0') return true;
+		if (text[i] != ' ' && text[i] != '\t' && text[i] != '\n') return false;
+	}
+	return true;
+}
+
 static inline void set_color(Ctx *ctx, SDL_Color color) {
 	SDL_SetRenderDrawColor(ctx->renderer, color.r, color.g, color.b, color.a);
 }
@@ -181,6 +191,11 @@ static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, siz
 		}
 	}
 	ctx->should_render = true;
+}
+
+static inline void debug_rect(Ctx *ctx, SDL_FRect *rect, SDL_Color color) {
+	set_color(ctx, color);
+	SDL_RenderRect(ctx->renderer, rect);
 }
 
 static inline Uint32 coords_to_text_index(Ctx *ctx, size_t text_length, char text[text_length], float pos) {
@@ -240,6 +255,9 @@ static inline bool get_frame_render_lines_rect(Ctx *ctx, Uint32 frame, SDL_FRect
 	get_frame_render_rect(ctx, frame, bounds);
 	bounds->x += CHAR_SIZE * 4;
 	bounds->w -= CHAR_SIZE * 4;
+	bounds->y += SDL_max(0, ctx->frames[frame].scroll.y);
+	bounds->h -= SDL_max(0, ctx->frames[frame].scroll.y);
+	bounds->h = SDL_max(bounds->h, 0);
 	return true;
 }
 
@@ -355,7 +373,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	for (Uint32 linenum = 0; linenum < lines_count; ++linenum) {
 		SDL_FRect line_bounds = {
 			.x = lines_bounds.x,
-			.y = lines_bounds.y + linenum * LINE_HEIGHT + SDL_max(0, SDL_floor(ctx->frames[frame].scroll_interp.y)),
+			.y = lines_bounds.y + linenum * LINE_HEIGHT,
 			.w = lines_bounds.w,
 			.h = LINE_HEIGHT,
 		};
@@ -389,7 +407,12 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	}
 	set_color(ctx, line_number_color);
 	for (Uint32 linenum = line_start; (linenum - line_start) * LINE_HEIGHT < lines_numbers_bounds.h; ++linenum) {
+#ifdef LINE_NUMS_DIM_SPACE
+		if (linenum > lines_count + line_start || lines[linenum].size <= 0) set_color(ctx, line_number_dimmed_color);
+		else set_color(ctx, line_number_color);
+#else
 		if (linenum == lines_count + line_start) set_color(ctx, line_number_dimmed_color);
+#endif
 		SDL_RenderDebugTextFormat(ctx->renderer, lines_numbers_bounds.x, lines_numbers_bounds.y + (linenum - line_start) * LINE_HEIGHT,
 				"%u", linenum);
 	}
@@ -463,7 +486,7 @@ static bool handle_frame_mouse_click(Ctx *ctx, Uint32 frame, SDL_FPoint point) {
 		draw_frame->cursor = 0;
 		return true;
 	}
-	Uint32 linenum = (point.y - bounds.y - ctx->frames[frame].scroll.y) / LINE_HEIGHT;
+	Uint32 linenum = (point.y - bounds.y) / LINE_HEIGHT;
 	String line = get_line(ctx, draw_frame->buffer->text_size, draw_frame->buffer->text, (Uint32)linenum);
 	if (line.text == NULL) {
 		draw_frame->cursor = draw_frame->buffer->text_size;

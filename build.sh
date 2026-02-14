@@ -11,4 +11,4 @@ DEBUG_ARGS="${DEBUG_ARGS} -DDEBUG_SCROLL=ON"
 DEBUG_ARGS="${DEBUG_ARGS} -DDEBUG_FILES=ON"
 ARGS="-Wall -Wextra -pedantic -lSDL3 -Wno-missing-braces"
 ARGS="${DEBUG_ARGS} ${ARGS}"
-gcc -o editor editor.c ${ARGS}
+gcc -o editor editor.c ${ARGS} "${@}"
