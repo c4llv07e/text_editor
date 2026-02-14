@@ -85,6 +85,39 @@ typedef struct Ctx {
 
 static const SDL_Color text_color = {0xe6, 0xe6, 0xe6, SDL_ALPHA_OPAQUE};
 static const SDL_Color line_number_color = {0xe6 / 2, 0xe6 / 2, 0xe6 / 2, SDL_ALPHA_OPAQUE};
+static const SDL_Color background_color = {0x04, 0x04, 0x04, SDL_ALPHA_OPAQUE};
+static const SDL_Color background_lines_color = {0x00, 0x30, 0x00, SDL_ALPHA_OPAQUE};
+static const SDL_Color debug_red __attribute__((unused)) = {0xff, 0x00, 0x00, SDL_ALPHA_OPAQUE};
+
+static inline SDL_Color hsv_to_rgb(SDL_Color hsv) {
+	SDL_Color rgb = {0, 0, 0, hsv.a};
+	float h = hsv.r / 255.0f * 360.0f;
+	float s = hsv.g / 255.0f;
+	float v = hsv.b / 255.0f;
+	float r, g, b;
+	if (s == 0) {
+		r = g = b = v;
+	} else {
+		float sector = h / 60.0f;
+		int i = (int)sector;
+		float f = sector - i;
+		float p = v * (1 - s);
+		float q = v * (1 - s * f);
+		float t = v * (1 - s * (1 - f));
+		switch (i) {
+		case 0:  r = v; g = t; b = p; break;
+		case 1:  r = q; g = v; b = p; break;
+		case 2:  r = p; g = v; b = t; break;
+		case 3:  r = p; g = q; b = v; break;
+		case 4:  r = t; g = p; b = v; break;
+		default: r = v; g = p; b = q; break;
+		}
+	}
+	rgb.r = (Uint8)(r * 255.0f + 0.5f);
+	rgb.g = (Uint8)(g * 255.0f + 0.5f);
+	rgb.b = (Uint8)(b * 255.0f + 0.5f);
+	return rgb;
+}
 
 static inline Uint32 reverse_sorted_index(Ctx *ctx, Uint32 sorted_ind) {
 	for (Uint32 i = 0; i < ctx->frames_count; ++i) {
@@ -92,6 +125,10 @@ static inline Uint32 reverse_sorted_index(Ctx *ctx, Uint32 sorted_ind) {
 	}
 	SDL_assert(!"Sorted index out of bounds");
 	return -1;
+}
+
+static inline void set_color(Ctx *ctx, SDL_Color color) {
+	SDL_SetRenderDrawColor(ctx->renderer, color.r, color.g, color.b, color.a);
 }
 
 static inline Uint32 count_lines(Ctx *ctx, size_t text_size, char text[text_size]) {
@@ -201,6 +238,9 @@ static inline bool get_frame_render_lines_rect(Ctx *ctx, Uint32 frame, SDL_FRect
 static inline bool get_frame_render_lines_numbers_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
 	get_frame_render_rect(ctx, frame, bounds);
 	bounds->w = CHAR_SIZE * 4;
+	bounds->y += SDL_max(0, ctx->frames[frame].scroll.y);
+	bounds->h -= SDL_max(0, ctx->frames[frame].scroll.y);
+	bounds->h = SDL_max(bounds->h, 0);
 	return true;
 }
 
@@ -320,7 +360,10 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			});
 		}
 	}
-	for (Uint32 linenum = line_start; (linenum - line_start) < ((lines_numbers_bounds.h) / LINE_HEIGHT); ++linenum) {
+	if (frame == 0)
+		SDL_Log("%u", line_start);
+	for (Uint32 linenum = line_start; (linenum - line_start) * LINE_HEIGHT < lines_numbers_bounds.h; ++linenum) {
+		set_color(ctx, line_number_color);
 		SDL_SetRenderDrawColor(ctx->renderer, line_number_color.r, line_number_color.g, line_number_color.b, line_number_color.a);
 		SDL_RenderDebugTextFormat(ctx->renderer, lines_numbers_bounds.x, lines_numbers_bounds.y + (linenum - line_start) * LINE_HEIGHT,
 				"%u", linenum);
@@ -467,6 +510,19 @@ static void log_handler(void *userdata, int category, SDL_LogPriority priority, 
 	buffer_insert_text(ctx, ctx->log_buffer, "\n", 1, ctx->log_buffer->text_size);
 }
 
+static void render_background(Ctx *ctx) {
+	set_color(ctx, background_color);
+	SDL_RenderClear(ctx->renderer);
+	set_color(ctx, background_lines_color);
+	for (float x = 0 + (int)ctx->transform.x % 0x40; x < ctx->win_w; x += 0x40) {
+		SDL_RenderLine(ctx->renderer, x, 0, x, ctx->win_h);
+	}
+	for (float y = 0 + (int)ctx->transform.y % 0x40; y < ctx->win_h; y += 0x40) {
+		SDL_RenderLine(ctx->renderer, 0, y, ctx->win_w, y);
+	}
+
+}
+
 static void render(Ctx *ctx, bool debug_screen) {
 	if (debug_screen) {
 		SDL_PixelFormat format = SDL_GetWindowPixelFormat(ctx->window);
@@ -505,15 +561,7 @@ static void render(Ctx *ctx, bool debug_screen) {
 		SDL_RenderPresent(ctx->renderer);
 		return;
 	}
-	SDL_SetRenderDrawColor(ctx->renderer, 0x04, 0x04, 0x04, 0xff);
-	SDL_RenderClear(ctx->renderer);
-	SDL_SetRenderDrawColor(ctx->renderer, 0x00, 0x20, 0x00, SDL_ALPHA_OPAQUE);
-	for (float x = 0 + (int)ctx->transform.x % 0x40; x < ctx->win_w; x += 0x40) {
-		SDL_RenderLine(ctx->renderer, x, 0, x, ctx->win_h);
-	}
-	for (float y = 0 + (int)ctx->transform.y % 0x40; y < ctx->win_h; y += 0x40) {
-		SDL_RenderLine(ctx->renderer, 0, y, ctx->win_w, y);
-	}
+	render_background(ctx);
 	for (Uint32 i = ctx->frames_count - 1; i != (Uint32)-1; --i) {
 		Uint32 sorted_frame = ctx->sorted_frames[i];
 		if (!ctx->frames[sorted_frame].taken) continue;
