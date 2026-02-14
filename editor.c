@@ -79,6 +79,7 @@ typedef struct Ctx {
 	Uint32 focused_frame;
 	int render_rotate_fan;
 	SDL_FPoint transform;
+	SDL_FRect debug_screen_rect;
 	Uint64 last_middle_click;
 } Ctx;
 
@@ -463,7 +464,44 @@ static void log_handler(void *userdata, int category, SDL_LogPriority priority, 
 	buffer_insert_text(ctx, ctx->log_buffer, "\n", 1, ctx->log_buffer->text_size);
 }
 
-static void render(Ctx *ctx) {
+static void render(Ctx *ctx, bool debug_screen) {
+	if (debug_screen) {
+		SDL_PixelFormat format = SDL_GetWindowPixelFormat(ctx->window);
+		SDL_Texture *texture = SDL_CreateTexture(ctx->renderer, format, SDL_TEXTUREACCESS_TARGET, ctx->win_w * 2, ctx->win_h * 2);
+		if (texture == NULL) {
+			SDL_LogWarn(0, "Can't create texture for debug screen: %s", SDL_GetError());
+			goto debug_screen_exit;
+		}
+		SDL_SetRenderTarget(ctx->renderer, texture);
+		SDL_Rect viewport = {
+			.x = ctx->win_w * 3/4,
+			.y = ctx->win_h * 3/4,
+			.w = ctx->win_w,
+			.h = ctx->win_h,
+		};
+		SDL_FRect viewportf;
+		SDL_RectToFRect(&viewport, &viewportf);
+		ctx->transform.x += viewport.x;
+		ctx->transform.y += viewport.y;
+		render(ctx, false);
+		ctx->transform.x -= viewport.x;
+		ctx->transform.y -= viewport.y;
+		debug_screen_exit:
+		SDL_SetRenderTarget(ctx->renderer, NULL);
+		if (texture) {
+			SDL_FRect screen_rect_borders = ctx->debug_screen_rect;
+			screen_rect_borders.x -= 1;
+			screen_rect_borders.y -= 1;
+			screen_rect_borders.w += 2;
+			screen_rect_borders.h += 2;
+			SDL_RenderTexture(ctx->renderer, texture, &viewportf, NULL);
+			SDL_SetRenderDrawColor(ctx->renderer, 0xff, 0xff, 0x00, SDL_ALPHA_OPAQUE);
+			SDL_RenderRect(ctx->renderer, &screen_rect_borders);
+			SDL_RenderTexture(ctx->renderer, texture, NULL, &ctx->debug_screen_rect);
+		}
+		SDL_RenderPresent(ctx->renderer);
+		return;
+	}
 	SDL_SetRenderDrawColor(ctx->renderer, 0x04, 0x04, 0x04, 0xff);
 	SDL_RenderClear(ctx->renderer);
 	SDL_SetRenderDrawColor(ctx->renderer, 0x00, 0x20, 0x00, SDL_ALPHA_OPAQUE);
@@ -510,6 +548,12 @@ int main(int argc, char *argv[argc]) {
 	Ctx ctx = {0};
 	ctx.win_w = 0x300;
 	ctx.win_h = 0x200;
+	ctx.debug_screen_rect = (SDL_FRect){
+		.x = ctx.win_w * 3/4,
+		.y = ctx.win_h * 1/20,
+		.w = ctx.win_w,
+		.h = ctx.win_h,
+	};
 	SDL_SetAppMetadata("Text editor", "1.0", "c4ll.text-editor");
 	if (!SDL_Init(SDL_INIT_VIDEO)) {
 		SDL_LogError(0, "Couldn't initialize SDL: %s", SDL_GetError());
@@ -565,11 +609,13 @@ int main(int argc, char *argv[argc]) {
 							case SDL_SCANCODE_LEFT: {
 								ctx.moving_col = false;
 								if (current_frame->cursor > 0) current_frame->cursor -= 1;
+								ctx.debug_screen_rect.x -= 10;
 								ctx.should_render = true;
 							}; break;
 							case SDL_SCANCODE_RIGHT: {
 								ctx.moving_col = false;
 								if (current_frame->cursor < current_frame->buffer->text_size) current_frame->cursor += 1;
+								ctx.debug_screen_rect.x += 10;
 								ctx.should_render = true;
 							}; break;
 							case SDL_SCANCODE_BACKSPACE: {
@@ -639,6 +685,7 @@ int main(int argc, char *argv[argc]) {
 							}; break;
 							case SDL_SCANCODE_UP: {
 								int row = 0;
+								ctx.debug_screen_rect.y -= 10;
 								if (current_frame->cursor > 0) {
 									current_frame->cursor--;
 								}
@@ -650,6 +697,7 @@ int main(int argc, char *argv[argc]) {
 								if (ctx.moving_col) row = ctx.last_row;
 								else ctx.last_row = row;
 								ctx.moving_col = true;
+								ctx.should_render = true;
 								if (current_frame->cursor == 0) break;
 								current_frame->cursor--;
 								while (current_frame->buffer->text[current_frame->cursor] != '\n' && current_frame->cursor > 0) {
@@ -661,10 +709,10 @@ int main(int argc, char *argv[argc]) {
 									else row--;
 									current_frame->cursor++;
 								}
-								ctx.should_render = true;
 							}; break;
 							case SDL_SCANCODE_DOWN: {
 								int row = 0;
+								ctx.debug_screen_rect.y += 10;
 								if (current_frame->cursor > 0) {
 									current_frame->cursor--;
 								}
@@ -676,6 +724,7 @@ int main(int argc, char *argv[argc]) {
 								if (ctx.moving_col) row = ctx.last_row;
 								else ctx.last_row = row;
 								ctx.moving_col = true;
+								ctx.should_render = true;
 								current_frame->cursor++;
 								while (current_frame->buffer->text[current_frame->cursor] != '\n' && current_frame->cursor < current_frame->buffer->text_size) {
 									current_frame->cursor++;
@@ -687,7 +736,6 @@ int main(int argc, char *argv[argc]) {
 									else row--;
 									current_frame->cursor++;
 								}
-								ctx.should_render = true;
 							}; break;
 							case SDL_SCANCODE_S: {
 								if (ctx.keymod & SDL_KMOD_CTRL) {
@@ -863,7 +911,7 @@ int main(int argc, char *argv[argc]) {
 		if (!ctx.running) break;
 		// if (SDL_GetTicks() - ctx.last_render >= 1000) ctx.should_render = true;
 		if (ctx.should_render) {
-			render(&ctx);
+			render(&ctx, true);
 			ctx.should_render = false;
 		}
 	}

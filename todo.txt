@@ -6,3 +6,5 @@
 - Switch to SDL Main callbacks
 - Replace SDL_GetModState with event
 - Fix text underflow in frames
+- Make cursor use coordinates for smooth transform
+- Fix lines after 255 not showing
