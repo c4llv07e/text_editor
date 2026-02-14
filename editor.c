@@ -277,7 +277,7 @@ static Uint32 split_into_lines(Ctx *ctx, Uint32 strings_length, String strings[s
 		};
 		line += 1;
 	}
-	return (Uint32)line;
+	return SDL_max(0, line);
 }
 
 static void render_frame(Ctx *ctx, Uint32 frame) {
@@ -296,11 +296,12 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		bounds.w,
 		bounds.h,
 	});
-	Uint32 lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, text, 0);
+	Uint32 lines_count;
+	lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, text, SDL_max(0, SDL_floor(-ctx->frames[frame].scroll.y / LINE_HEIGHT)));
 	for (Uint32 linenum = 0; linenum < lines_count; ++linenum) {
 		SDL_FRect line_bounds = {
 			.x = lines_bounds.x,
-			.y = lines_bounds.y + linenum * LINE_HEIGHT + draw_frame->scroll.y,
+			.y = lines_bounds.y + linenum * LINE_HEIGHT + SDL_max(0, SDL_floor(ctx->frames[frame].scroll.y)),
 			.w = lines_bounds.w,
 			.h = LINE_HEIGHT,
 		};
@@ -883,6 +884,7 @@ int main(int argc, char *argv[argc]) {
 					} break;
 					case SDL_EVENT_MOUSE_WHEEL: {
 						current_frame->scroll.y += ev.wheel.y * 32;
+						SDL_LogTrace(0, "Scroll %d to %f", ctx.focused_frame, current_frame->scroll.y);
 						ctx.should_render = true;
 					} break;
 					case SDL_EVENT_TEXT_INPUT: {
