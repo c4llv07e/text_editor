@@ -304,6 +304,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			.w = lines_bounds.w,
 			.h = LINE_HEIGHT,
 		};
+		if (line_bounds.y >= lines_bounds.y + lines_bounds.h) break;
 		String line = lines[linenum];
 		SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
 		render_line(ctx, line_bounds, line.text, line.size);
@@ -380,7 +381,7 @@ static bool handle_frame_mouse_click(Ctx *ctx, Uint32 frame, SDL_FPoint point) {
 		draw_frame->cursor = 0;
 		return false;
 	}
-	Uint32 linenum = (point.y - bounds.y) / LINE_HEIGHT;
+	Uint32 linenum = (point.y - bounds.y - ctx->frames[frame].scroll.y) / LINE_HEIGHT;
 	String line = get_line(ctx, draw_frame->buffer->text_size, draw_frame->buffer->text, (Uint32)linenum);
 	if (line.text == NULL) {
 		draw_frame->cursor = draw_frame->buffer->text_size;
@@ -911,7 +912,7 @@ int main(int argc, char *argv[argc]) {
 		if (!ctx.running) break;
 		// if (SDL_GetTicks() - ctx.last_render >= 1000) ctx.should_render = true;
 		if (ctx.should_render) {
-			render(&ctx, true);
+			render(&ctx, false);
 			ctx.should_render = false;
 		}
 	}
