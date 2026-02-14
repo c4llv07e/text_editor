@@ -77,6 +77,7 @@ typedef struct Ctx {
 	Frame *frames;
 	Uint32 *sorted_frames;
 	Uint32 focused_frame;
+	int render_rotate_fan;
 	SDL_FPoint transform;
 	Uint64 last_middle_click;
 } Ctx;
@@ -484,8 +485,17 @@ static void render(Ctx *ctx) {
 		SDL_RenderDebugTextFormat(ctx->renderer, 400, LINE_HEIGHT * i, "%" SDL_PRIu32 " %" SDL_PRIu32, i, ctx->sorted_frames[i]);
 	}
 #endif
+	SDL_SetRenderDrawColor(ctx->renderer, 0x22, 0x22, 0x22, 0xff);
+	SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
+		0, 0, 0x10, 0x10,
+	});
+	SDL_SetRenderDrawColor(ctx->renderer, 0xcc, 0xcc, 0xcc, 0xff);
+	SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
+		(ctx->render_rotate_fan % 2) * 0x10 / 2, (ctx->render_rotate_fan / 2) * 0x10 / 2, 0x10 / 2, 0x10 / 2,
+	});
 	SDL_RenderPresent(ctx->renderer);
 	ctx->last_render = SDL_GetTicks();
+	ctx->render_rotate_fan = (ctx->render_rotate_fan + 1) % 4;
 }
 
 int main(int argc, char *argv[argc]) {
