@@ -55,6 +55,7 @@ typedef struct Frame {
 	Ask_Option ask_option;
 	char *filename;
 	SDL_FRect bounds;
+	SDL_FPoint scroll_interp;
 	SDL_FPoint scroll;
 	// I want edit one files in multiple frames, so cursor is needed here
 	Uint32 cursor;
@@ -343,13 +344,18 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		bounds.w,
 		bounds.h,
 	});
+	if (SDL_fabs(ctx->frames[frame].scroll_interp.y - ctx->frames[frame].scroll.y) >= 0.01) {
+		float speed = 0.3;
+		ctx->frames[frame].scroll_interp.y = lerp(ctx->frames[frame].scroll_interp.y, ctx->frames[frame].scroll.y, speed);
+		ctx->should_render = true;
+	}
 	Uint32 lines_count;
-	Uint32 line_start = SDL_max(0, SDL_floor(-ctx->frames[frame].scroll.y / LINE_HEIGHT));
+	Uint32 line_start = SDL_max(0, SDL_floor(-ctx->frames[frame].scroll_interp.y / LINE_HEIGHT));
 	lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, text, line_start);
 	for (Uint32 linenum = 0; linenum < lines_count; ++linenum) {
 		SDL_FRect line_bounds = {
 			.x = lines_bounds.x,
-			.y = lines_bounds.y + linenum * LINE_HEIGHT + SDL_max(0, SDL_floor(ctx->frames[frame].scroll.y)),
+			.y = lines_bounds.y + linenum * LINE_HEIGHT + SDL_max(0, SDL_floor(ctx->frames[frame].scroll_interp.y)),
 			.w = lines_bounds.w,
 			.h = LINE_HEIGHT,
 		};
