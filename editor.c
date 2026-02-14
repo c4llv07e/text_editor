@@ -22,6 +22,8 @@
 #define CHAR_SIZE SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE
 #define LINE_HEIGHT ((int)(CHAR_SIZE * 1.5))
 
+#define lerp(from, to, value) ((from) + ((to) - (from)) * (value))
+
 typedef struct {
 	size_t size;
 	char *text;
@@ -81,10 +83,12 @@ typedef struct Ctx {
 	SDL_FPoint transform;
 	SDL_FRect debug_screen_rect;
 	Uint64 last_middle_click;
+	SDL_FPoint active_cursor_pos;
 } Ctx;
 
 static const SDL_Color text_color = {0xe6, 0xe6, 0xe6, SDL_ALPHA_OPAQUE};
 static const SDL_Color line_number_color = {0xe6 / 2, 0xe6 / 2, 0xe6 / 2, SDL_ALPHA_OPAQUE};
+static const SDL_Color line_number_dimmed_color = {0xe6 / 4, 0xe6 / 4, 0xe6 / 4, SDL_ALPHA_OPAQUE};
 static const SDL_Color background_color = {0x04, 0x04, 0x04, SDL_ALPHA_OPAQUE};
 static const SDL_Color background_lines_color = {0x00, 0x30, 0x00, SDL_ALPHA_OPAQUE};
 static const SDL_Color debug_red __attribute__((unused)) = {0xff, 0x00, 0x00, SDL_ALPHA_OPAQUE};
@@ -164,11 +168,14 @@ static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, siz
 	buffer->text[buffer->text_size] = '\0';
 	for (Uint32 i = 0; i < ctx->frames_count; ++i) {
 		if (!ctx->frames[i].taken) continue;
-		if (ctx->frames[i].buffer == buffer && !ctx->frames[i].scroll_lock) {
-			Sint32 text_lines = (Sint32)count_lines(ctx, buffer->text_size, buffer->text);
-			Sint32 buffer_last_line = (Sint32)SDL_ceil((ctx->frames[i].bounds.h - ctx->frames[i].scroll.y) / LINE_HEIGHT);
-			if (text_lines > buffer_last_line) {
-				ctx->frames[i].scroll.y = ctx->frames[i].bounds.h - text_lines * LINE_HEIGHT;
+		if (ctx->frames[i].buffer == buffer) {
+			if (ctx->frames[i].cursor == buffer->text_size - 1) ctx->frames[i].scroll_lock = false;
+			if (!ctx->frames[i].scroll_lock) {
+				Sint32 text_lines = (Sint32)count_lines(ctx, buffer->text_size, buffer->text);
+				Sint32 buffer_last_line = (Sint32)SDL_ceil((ctx->frames[i].bounds.h - ctx->frames[i].scroll.y) / LINE_HEIGHT);
+				if (text_lines > buffer_last_line) {
+					ctx->frames[i].scroll.y = ctx->frames[i].bounds.h - text_lines * LINE_HEIGHT;
+				}
 			}
 		}
 	}
@@ -352,22 +359,45 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		render_line(ctx, line_bounds, line.text, line.size);
 		if (line.text - text <= draw_frame->cursor &&
 			((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->cursor))) {
-			SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
+			SDL_FPoint actual_cursor_pos = {
 				.x = line_bounds.x + bytes_to_visual(ctx, line.size, line.text, draw_frame->cursor - (line.text - text)) * CHAR_SIZE,
 				.y = line_bounds.y,
-				.w = 2,
+			};
+			float speed = 0.4;
+			Uint32 width = 2;
+			if (ctx->focused_frame == frame &&
+				(((SDL_fabs(actual_cursor_pos.x - ctx->active_cursor_pos.x) >= 0.01) ||
+				  (SDL_fabs(actual_cursor_pos.y - ctx->active_cursor_pos.y) >= 0.01)))) {
+				width = SDL_max(width, SDL_log(SDL_abs(ctx->active_cursor_pos.x - lerp(ctx->active_cursor_pos.x, actual_cursor_pos.x, speed))) * 2);
+				ctx->active_cursor_pos.x = lerp(ctx->active_cursor_pos.x, actual_cursor_pos.x, speed);
+				ctx->active_cursor_pos.y = lerp(ctx->active_cursor_pos.y, actual_cursor_pos.y, speed);
+				ctx->should_render = true;
+			}
+			SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
+				.x = ctx->active_cursor_pos.x,
+				.y = ctx->active_cursor_pos.y,
+				.w = width,
 				.h = LINE_HEIGHT,
 			});
 		}
 	}
-	if (frame == 0)
-		SDL_Log("%u", line_start);
+	set_color(ctx, line_number_color);
 	for (Uint32 linenum = line_start; (linenum - line_start) * LINE_HEIGHT < lines_numbers_bounds.h; ++linenum) {
-		set_color(ctx, line_number_color);
-		SDL_SetRenderDrawColor(ctx->renderer, line_number_color.r, line_number_color.g, line_number_color.b, line_number_color.a);
+		if (linenum == lines_count + line_start) set_color(ctx, line_number_dimmed_color);
 		SDL_RenderDebugTextFormat(ctx->renderer, lines_numbers_bounds.x, lines_numbers_bounds.y + (linenum - line_start) * LINE_HEIGHT,
 				"%u", linenum);
 	}
+#ifdef DEBUG_SCROLL
+	if (draw_frame->scroll_lock)
+		SDL_SetRenderDrawColor(ctx->renderer, 0xcc, 0x20, 0x20, SDL_ALPHA_OPAQUE);
+	else
+		SDL_SetRenderDrawColor(ctx->renderer, 0x20, 0xcc, 0x20, SDL_ALPHA_OPAQUE);
+	SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
+		bounds.x + bounds.w - 0x10,
+		bounds.y,
+		0x10, 0x10,
+	});
+#endif
 #ifdef DEBUG_FILES
 	if (draw_frame->filename) {
 		SDL_SetRenderDrawColor(ctx->renderer, 0x20, 0x20, 0x20, SDL_ALPHA_OPAQUE);
@@ -422,15 +452,16 @@ static bool handle_frame_mouse_click(Ctx *ctx, Uint32 frame, SDL_FPoint point) {
 	SDL_FRect bounds;
 	Frame *draw_frame = &ctx->frames[frame];
 	get_frame_render_lines_rect(ctx, frame, &bounds);
+	draw_frame->scroll_lock = true;
 	if (point.y < bounds.y) {
 		draw_frame->cursor = 0;
-		return false;
+		return true;
 	}
 	Uint32 linenum = (point.y - bounds.y - ctx->frames[frame].scroll.y) / LINE_HEIGHT;
 	String line = get_line(ctx, draw_frame->buffer->text_size, draw_frame->buffer->text, (Uint32)linenum);
 	if (line.text == NULL) {
 		draw_frame->cursor = draw_frame->buffer->text_size;
-		return false;
+		return true;
 	}
 	// Don't fucking reallocate sized strings which only point is zero copy.
 	SDL_assert(line.text >= draw_frame->buffer->text && line.text <= draw_frame->buffer->text + draw_frame->buffer->text_size);
@@ -524,6 +555,7 @@ static void render_background(Ctx *ctx) {
 }
 
 static void render(Ctx *ctx, bool debug_screen) {
+	ctx->should_render = false;
 	if (debug_screen) {
 		SDL_PixelFormat format = SDL_GetWindowPixelFormat(ctx->window);
 		SDL_Texture *texture = SDL_CreateTexture(ctx->renderer, format, SDL_TEXTUREACCESS_TARGET, ctx->win_w * 2, ctx->win_h * 2);
@@ -647,7 +679,7 @@ int main(int argc, char *argv[argc]) {
 	ctx.should_render = true;
 	while (ctx.running) {
 		SDL_Event ev;
-		if (SDL_WaitEventTimeout(NULL, 150)) {
+		if (ctx.should_render || SDL_WaitEventTimeout(NULL, 150)) {
 			while (SDL_PollEvent(&ev)) {
 				Frame *current_frame = &ctx.frames[ctx.focused_frame];
 				switch (ev.type) {
@@ -659,12 +691,14 @@ int main(int argc, char *argv[argc]) {
 						switch (ev.key.scancode) {
 							case SDL_SCANCODE_LEFT: {
 								ctx.moving_col = false;
+								current_frame->scroll_lock = true;
 								if (current_frame->cursor > 0) current_frame->cursor -= 1;
 								ctx.debug_screen_rect.x -= 10;
 								ctx.should_render = true;
 							}; break;
 							case SDL_SCANCODE_RIGHT: {
 								ctx.moving_col = false;
+								current_frame->scroll_lock = true;
 								if (current_frame->cursor < current_frame->buffer->text_size) current_frame->cursor += 1;
 								ctx.debug_screen_rect.x += 10;
 								ctx.should_render = true;
@@ -736,6 +770,7 @@ int main(int argc, char *argv[argc]) {
 							}; break;
 							case SDL_SCANCODE_UP: {
 								int row = 0;
+								current_frame->scroll_lock = true;
 								ctx.debug_screen_rect.y -= 10;
 								if (current_frame->cursor > 0) {
 									current_frame->cursor--;
@@ -763,6 +798,7 @@ int main(int argc, char *argv[argc]) {
 							}; break;
 							case SDL_SCANCODE_DOWN: {
 								int row = 0;
+								current_frame->scroll_lock = true;
 								ctx.debug_screen_rect.y += 10;
 								if (current_frame->cursor > 0) {
 									current_frame->cursor--;
@@ -933,6 +969,7 @@ int main(int argc, char *argv[argc]) {
 					} break;
 					case SDL_EVENT_MOUSE_WHEEL: {
 						current_frame->scroll.y += ev.wheel.y * 32;
+						current_frame->scroll_lock = true;
 						SDL_LogTrace(0, "Scroll %d to %f", ctx.focused_frame, current_frame->scroll.y);
 						ctx.should_render = true;
 					} break;
@@ -964,7 +1001,6 @@ int main(int argc, char *argv[argc]) {
 		// if (SDL_GetTicks() - ctx.last_render >= 1000) ctx.should_render = true;
 		if (ctx.should_render) {
 			render(&ctx, false);
-			ctx.should_render = false;
 		}
 	}
 #ifdef DEBUG
