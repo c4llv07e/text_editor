@@ -466,6 +466,13 @@ static void log_handler(void *userdata, int category, SDL_LogPriority priority, 
 static void render(Ctx *ctx) {
 	SDL_SetRenderDrawColor(ctx->renderer, 0x04, 0x04, 0x04, 0xff);
 	SDL_RenderClear(ctx->renderer);
+	SDL_SetRenderDrawColor(ctx->renderer, 0x00, 0x20, 0x00, SDL_ALPHA_OPAQUE);
+	for (float x = 0 + (int)ctx->transform.x % 0x40; x < ctx->win_w; x += 0x40) {
+		SDL_RenderLine(ctx->renderer, x, 0, x, ctx->win_h);
+	}
+	for (float y = 0 + (int)ctx->transform.y % 0x40; y < ctx->win_h; y += 0x40) {
+		SDL_RenderLine(ctx->renderer, 0, y, ctx->win_w, y);
+	}
 	for (Uint32 i = ctx->frames_count - 1; i != (Uint32)-1; --i) {
 		Uint32 sorted_frame = ctx->sorted_frames[i];
 		if (!ctx->frames[sorted_frame].taken) continue;
