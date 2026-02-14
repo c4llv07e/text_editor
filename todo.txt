@@ -1,8 +1,13 @@
 - Use SDL Utf8 support
 - Fix memory leaks in save/open files
 - Handle save/open errors
-- Add ref counter to buffers
-	- Opening file should create new buffer, not override current
+- Make global list of all buffers
 - Switch to SDL Main callbacks
 - Replace SDL_GetModState with event
 - Add delta time for render animations
+- Keybinds must be keycodes, not scancodes
+- Open file in argv[1] if exists
+- Store layout in project file
+- Open images in frame
+- Open folders in frame
+- Possible layout like acme
