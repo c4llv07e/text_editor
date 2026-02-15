@@ -397,12 +397,21 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 				ctx->active_cursor_pos.y = lerp(ctx->active_cursor_pos.y, actual_cursor_pos.y, speed);
 				ctx->should_render = true;
 			}
-			SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
-				.x = ctx->active_cursor_pos.x,
-				.y = ctx->active_cursor_pos.y,
-				.w = width,
-				.h = LINE_HEIGHT,
-			});
+			if (ctx->focused_frame == frame) {
+				SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
+					.x = ctx->active_cursor_pos.x,
+					.y = ctx->active_cursor_pos.y,
+					.w = width,
+					.h = LINE_HEIGHT,
+				});
+			} else {
+				SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
+					.x = actual_cursor_pos.x,
+					.y = actual_cursor_pos.y,
+					.w = CHAR_SIZE,
+					.h = LINE_HEIGHT,
+				});
+			}
 		}
 	}
 	set_color(ctx, line_number_color);
