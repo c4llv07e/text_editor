@@ -791,6 +791,7 @@ int main(int argc, char *argv[argc]) {
 										Frame *parent_frame = &ctx.frames[current_frame->parent_frame];
 										parent_frame->filename =
 											SDL_strndup(current_frame->buffer->text, current_frame->buffer->text_size);
+										current_frame->buffer->refcount -= 1;
 										current_frame->taken = false;
 										ctx.focused_frame = current_frame->parent_frame;
 										current_frame = &ctx.frames[ctx.focused_frame];
@@ -801,6 +802,7 @@ int main(int argc, char *argv[argc]) {
 										Frame *parent_frame = &ctx.frames[current_frame->parent_frame];
 										parent_frame->filename =
 											SDL_strndup(current_frame->buffer->text, current_frame->buffer->text_size);
+										parent_frame->buffer->refcount -= 1;
 										parent_frame->buffer = allocate_buffer(&ctx, SDL_strdup(parent_frame->filename));
 										if (parent_frame->buffer == NULL) {
 											SDL_LogError(0, "Can't allocate buffer for this file");
@@ -808,7 +810,9 @@ int main(int argc, char *argv[argc]) {
 										}
 										parent_frame->buffer->text = SDL_LoadFile(parent_frame->filename, &parent_frame->buffer->text_capacity);
 										parent_frame->buffer->text_size = parent_frame->buffer->text_capacity;
+										parent_frame->buffer->refcount += 1;
 										current_frame->taken = false;
+										current_frame->buffer->refcount -= 1;
 										ctx.focused_frame = current_frame->parent_frame;
 										current_frame = &ctx.frames[ctx.focused_frame];
 										ctx.should_render = true;
