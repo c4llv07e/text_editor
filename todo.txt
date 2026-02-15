@@ -1,5 +1,4 @@
 - Use SDL Utf8 support
-	- Use SDL_ttf for ttf support
 - Fix memory leaks in save/open files
 - Handle save/open errors
 - Replace SDL_GetModState with event

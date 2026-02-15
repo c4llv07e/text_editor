@@ -17,12 +17,10 @@
 #define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
+#include <SDL3_ttf/SDL_ttf.h>
 
 #define TEXT_CHUNK_SIZE 256
 #define TAB_WIDTH 8
-
-#define CHAR_SIZE SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE
-#define LINE_HEIGHT ((int)(CHAR_SIZE * 1.5))
 
 #define lerp(from, to, value) ((from) + ((to) - (from)) * (value))
 
@@ -70,6 +68,10 @@ typedef struct Frame {
 typedef struct Ctx {
 	SDL_Renderer *renderer;
 	SDL_Window *window;
+	TTF_Font *font;
+	float font_size;
+	float font_width;
+	float line_height;
 	Uint32 last_row;
 	int win_w, win_h;
 	bool keys[SDL_SCANCODE_COUNT];
@@ -190,9 +192,9 @@ static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, siz
 			if (ctx->frames[i].cursor == buffer->text_size - 1) ctx->frames[i].scroll_lock = false;
 			if (!ctx->frames[i].scroll_lock) {
 				Sint32 text_lines = (Sint32)count_lines(ctx, buffer->text_size, buffer->text);
-				Sint32 buffer_last_line = (Sint32)SDL_ceil((ctx->frames[i].bounds.h - ctx->frames[i].scroll.y) / LINE_HEIGHT);
+				Sint32 buffer_last_line = (Sint32)SDL_ceil((ctx->frames[i].bounds.h - ctx->frames[i].scroll.y) / ctx->line_height);
 				if (text_lines > buffer_last_line) {
-					ctx->frames[i].scroll.y = ctx->frames[i].bounds.h - text_lines * LINE_HEIGHT;
+					ctx->frames[i].scroll.y = ctx->frames[i].bounds.h - text_lines * ctx->line_height;
 				}
 			}
 		}
@@ -214,9 +216,9 @@ static inline Uint32 coords_to_text_index(Ctx *ctx, size_t text_length, char tex
 	//                      | 7 nvis_char
 	//                            | 9 after
 	visual_char = 0;
-	if (pos / CHAR_SIZE <= -0.4) return 0;
+	if (pos / ctx->font_width <= -0.4) return 0;
 	for (ind = 0; ind < text_length && text[ind] != '\0'; ++ind) {
-		float diff = (pos - (float)visual_char * CHAR_SIZE) / CHAR_SIZE;
+		float diff = (pos - (float)visual_char * ctx->font_width) / ctx->font_width;
 		if (text[ind] == '\t') {
 			visual_char += TAB_WIDTH;
 			if (diff <= TAB_WIDTH / 2) return ind;
@@ -260,8 +262,8 @@ bool get_frame_render_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
 
 static inline bool get_frame_render_lines_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
 	get_frame_render_rect(ctx, frame, bounds);
-	bounds->x += CHAR_SIZE * 4;
-	bounds->w -= CHAR_SIZE * 4;
+	bounds->x += ctx->font_width * 4;
+	bounds->w -= ctx->font_width * 4;
 	bounds->y += SDL_max(0, ctx->frames[frame].scroll.y);
 	bounds->h -= SDL_max(0, ctx->frames[frame].scroll.y);
 	bounds->h = SDL_max(bounds->h, 0);
@@ -270,17 +272,59 @@ static inline bool get_frame_render_lines_rect(Ctx *ctx, Uint32 frame, SDL_FRect
 
 static inline bool get_frame_render_lines_numbers_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
 	get_frame_render_rect(ctx, frame, bounds);
-	bounds->w = CHAR_SIZE * 4;
+	bounds->w = ctx->font_width * 4;
 	bounds->y += SDL_max(0, ctx->frames[frame].scroll.y);
 	bounds->h -= SDL_max(0, ctx->frames[frame].scroll.y);
 	bounds->h = SDL_max(bounds->h, 0);
 	return true;
 }
 
+static inline bool draw_text(Ctx *ctx, float x, float y, SDL_Color color, size_t text_length, const char text[text_length]) {
+	SDL_Surface *surface = TTF_RenderText_Blended(ctx->font, text, text_length, color);
+	if (surface == NULL) {
+		SDL_LogWarn(0, "Can't render text |%.*s|: %s", (int)text_length, text, SDL_GetError());
+		return false;
+	}
+	SDL_assert(surface != NULL);
+	SDL_Texture *texture = SDL_CreateTextureFromSurface(ctx->renderer, surface);
+	SDL_assert(texture != NULL);
+	SDL_DestroySurface(surface);
+	SDL_RenderTexture(ctx->renderer, texture, NULL, &(SDL_FRect) {
+		.x = SDL_floor(x),
+		.y = SDL_floor(y),
+		.w = texture->w,
+		.h = texture->h,
+	});
+	SDL_DestroyTexture(texture);
+	return true;
+}
+
+static inline bool draw_text_fmt(Ctx *ctx, float x, float y, SDL_Color color, SDL_PRINTF_FORMAT_STRING const char *fmt, ...) SDL_PRINTF_VARARG_FUNC(5);
+static inline bool draw_text_fmt(Ctx *ctx, float x, float y, SDL_Color color, SDL_PRINTF_FORMAT_STRING const char *fmt, ...) {
+	va_list ap;
+	va_start(ap, fmt);
+	if (SDL_strcmp(fmt, "%s") == 0) {
+		const char *str = va_arg(ap, const char *);
+		va_end(ap);
+		return draw_text(ctx, x, y, color, 0, str);
+	}
+	char *str = NULL;
+	const int rc = SDL_vasprintf(&str, fmt, ap);
+	va_end(ap);
+	if (rc == -1) {
+		SDL_LogWarn(0, "Can't allocate with vasprintf format |%s|", fmt);
+		return false;
+	}
+	bool ret = draw_text(ctx, x, y, color, rc, str);
+	SDL_free(str);
+	return ret;
+}
+
 static void render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t len) {
 	char tmp[1024];
 	size_t out = 0;
-	for (size_t i = 0; i < len && out < sizeof(tmp) - 1 && out < frame.w / 8; ++i) {
+	if (len == 0) return;
+	for (size_t i = 0; i < len && out < sizeof(tmp) - 1 && out < SDL_floor(frame.w / ctx->font_width); ++i) {
 		if (buffer[i] == '\t') {
 			for (int s = 0; s < TAB_WIDTH && out < sizeof(tmp) - 1; ++s) {
 				tmp[out++] = ' ';
@@ -290,8 +334,7 @@ static void render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t le
 		}
 	}
 	tmp[out++] = '\0';
-	SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
-	SDL_RenderDebugText(ctx->renderer, SDL_floor(frame.x), SDL_floor(frame.y), tmp);
+	draw_text(ctx, frame.x, frame.y, text_color, out - 1, tmp);
 #ifdef DEBUG_LAYOUT
 	SDL_SetRenderDrawColor(ctx->renderer, 0xff, 0x00, 0x00, 0xff);
 	SDL_RenderRect(ctx->renderer, &frame);
@@ -361,7 +404,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	get_frame_render_rect(ctx, frame, &bounds);
 	get_frame_render_lines_rect(ctx, frame, &lines_bounds);
 	get_frame_render_lines_numbers_rect(ctx, frame, &lines_numbers_bounds);
-	SDL_assert(SDL_arraysize(lines) >= (lines_bounds.h / LINE_HEIGHT));
+	SDL_assert(SDL_arraysize(lines) >= (lines_bounds.h / ctx->line_height));
 	SDL_SetRenderDrawColor(ctx->renderer, 0x12, 0x12, 0x12, SDL_ALPHA_OPAQUE);
 	SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
 		bounds.x,
@@ -375,23 +418,22 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		ctx->should_render = true;
 	}
 	Uint32 lines_count;
-	Uint32 line_start = SDL_max(0, SDL_floor(-ctx->frames[frame].scroll_interp.y / LINE_HEIGHT));
+	Uint32 line_start = SDL_max(0, SDL_floor(-ctx->frames[frame].scroll_interp.y / ctx->line_height));
 	lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, text, line_start);
 	for (Uint32 linenum = 0; linenum < lines_count; ++linenum) {
 		SDL_FRect line_bounds = {
 			.x = lines_bounds.x,
-			.y = lines_bounds.y + linenum * LINE_HEIGHT,
+			.y = lines_bounds.y + linenum * ctx->line_height,
 			.w = lines_bounds.w,
-			.h = LINE_HEIGHT,
+			.h = ctx->line_height,
 		};
 		if (line_bounds.y >= lines_bounds.y + lines_bounds.h) break;
 		String line = lines[linenum];
-		SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
 		render_line(ctx, line_bounds, line.text, line.size);
 		if (line.text - text <= draw_frame->cursor &&
 			((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->cursor))) {
 			SDL_FPoint actual_cursor_pos = {
-				.x = line_bounds.x + bytes_to_visual(ctx, line.size, line.text, draw_frame->cursor - (line.text - text)) * CHAR_SIZE,
+				.x = line_bounds.x + bytes_to_visual(ctx, line.size, line.text, draw_frame->cursor - (line.text - text)) * ctx->font_width,
 				.y = line_bounds.y,
 			};
 			float speed = 0.4;
@@ -404,33 +446,33 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 				ctx->active_cursor_pos.y = lerp(ctx->active_cursor_pos.y, actual_cursor_pos.y, speed);
 				ctx->should_render = true;
 			}
+			set_color(ctx, text_color);
 			if (ctx->focused_frame == frame) {
 				SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
 					.x = ctx->active_cursor_pos.x,
 					.y = ctx->active_cursor_pos.y,
 					.w = width,
-					.h = LINE_HEIGHT,
+					.h = ctx->line_height,
 				});
 			} else {
 				SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
 					.x = actual_cursor_pos.x,
 					.y = actual_cursor_pos.y,
-					.w = CHAR_SIZE,
-					.h = LINE_HEIGHT,
+					.w = ctx->font_width,
+					.h = ctx->line_height,
 				});
 			}
 		}
 	}
-	set_color(ctx, line_number_color);
-	for (Uint32 linenum = line_start; (linenum - line_start) * LINE_HEIGHT < lines_numbers_bounds.h; ++linenum) {
+	SDL_Color current_color = line_number_color;
+	for (Uint32 linenum = line_start; (linenum - line_start) * ctx->line_height < lines_numbers_bounds.h; ++linenum) {
 #ifdef LINE_NUMS_DIM_SPACE
-		if (linenum > lines_count + line_start || lines[linenum].size <= 0) set_color(ctx, line_number_dimmed_color);
-		else set_color(ctx, line_number_color);
+		if (linenum > lines_count + line_start || lines[linenum].size <= 0) current_color = line_number_dimmed_color;
+		else current_color = line_number_color;
 #else
-		if (linenum == lines_count + line_start) set_color(ctx, line_number_dimmed_color);
+		if (linenum == lines_count + line_start) current_color = line_number_dimmed_color;
 #endif
-		SDL_RenderDebugTextFormat(ctx->renderer, lines_numbers_bounds.x, lines_numbers_bounds.y + (linenum - line_start) * LINE_HEIGHT,
-				"%u", linenum);
+		draw_text_fmt(ctx, lines_numbers_bounds.x, lines_numbers_bounds.y + (linenum - line_start) * ctx->line_height, current_color, "%u", linenum);
 	}
 #ifdef DEBUG_SCROLL
 	if (draw_frame->scroll_lock)
@@ -446,17 +488,14 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 #ifdef DEBUG_FILES
 	if (draw_frame->filename) {
 		SDL_SetRenderDrawColor(ctx->renderer, 0x20, 0x20, 0x20, SDL_ALPHA_OPAQUE);
-		SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
-			bounds.x + bounds.w - SDL_strlen(draw_frame->filename) * CHAR_SIZE,
-			bounds.y + bounds.h - LINE_HEIGHT,
-			SDL_strlen(draw_frame->filename) * CHAR_SIZE,
-			LINE_HEIGHT,
+		SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
+			bounds.x + bounds.w - SDL_strlen(draw_frame->filename) * ctx->font_width,
+			bounds.y + bounds.h - ctx->line_height,
+			SDL_strlen(draw_frame->filename) * ctx->font_width,
+			ctx->line_height,
 		});
-		SDL_SetRenderDrawColor(ctx->renderer, text_color.r, text_color.g, text_color.b, text_color.a);
-		SDL_RenderDebugText(ctx->renderer,
-			bounds.x + bounds.w - SDL_strlen(draw_frame->filename) * CHAR_SIZE,
-			bounds.y + bounds.h - LINE_HEIGHT,
-			draw_frame->filename);
+		draw_text(ctx, bounds.x + bounds.w - SDL_strlen(draw_frame->filename) * ctx->font_width,
+			bounds.y + bounds.h - ctx->line_height, text_color, 0, draw_frame->filename);
 	}
 #endif
 	if (ctx->focused_frame == frame) {
@@ -511,7 +550,7 @@ static bool handle_frame_mouse_click(Ctx *ctx, Uint32 frame, SDL_FPoint point) {
 		draw_frame->cursor = 0;
 		return true;
 	}
-	Uint32 linenum = (point.y - bounds.y) / LINE_HEIGHT;
+	Uint32 linenum = (point.y - bounds.y) / ctx->line_height;
 	String line = get_line(ctx, draw_frame->buffer->text_size, draw_frame->buffer->text, (Uint32)linenum);
 	if (line.text == NULL) {
 		draw_frame->cursor = draw_frame->buffer->text_size;
@@ -576,7 +615,7 @@ static Uint32 create_ask_frame(Ctx *ctx, Ask_Option option, Uint32 parent) {
 		SDL_Log("Error, can't allocate ask buffer");
 		return -1;
 	}
-	Uint32 frame = append_frame(ctx, buffer, (SDL_FRect){0, ctx->win_h - LINE_HEIGHT, ctx->win_w, LINE_HEIGHT});
+	Uint32 frame = append_frame(ctx, buffer, (SDL_FRect){0, ctx->win_h - ctx->line_height, ctx->win_w, ctx->line_height});
 	if (frame == (Uint32)-1) {
 		SDL_Log("Error, can't append ask buffer");
 		return -1;
@@ -664,14 +703,12 @@ static void render(Ctx *ctx, bool debug_screen) {
 	}
 #ifdef DEBUG_BUFFERS
 	for (Uint32 i = 0; i < ctx->buffers_count; ++i) {
-		SDL_SetRenderDrawColor(ctx->renderer, 0xff, 0x00, 0xff, 0xff);
-		SDL_RenderDebugTextFormat(ctx->renderer, 200, LINE_HEIGHT * i, "%" SDL_PRIu32 " %" SDL_PRIs32 " %s", i, ctx->buffers[i].refcount, ctx->buffers[i].name);
+		draw_text_fmt(ctx, 200, ctx->line_height * i, (SDL_Color) {0xff, 0x00, 0xff, 0xff}, "%" SDL_PRIu32 " %" SDL_PRIs32 " %s", i, ctx->buffers[i].refcount, ctx->buffers[i].name);
 	}
 #endif
 #ifdef DEBUG_SORT
 	for (Uint32 i = 0; i < ctx->frames_count; ++i) {
-		SDL_SetRenderDrawColor(ctx->renderer, 0x00, 0xff, 0xff, 0xff);
-		SDL_RenderDebugTextFormat(ctx->renderer, 400, LINE_HEIGHT * i, "%" SDL_PRIu32 " %" SDL_PRIu32, i, ctx->sorted_frames[i]);
+		draw_text_fmt(ctx, 400, ctx->line_height * i, (SDL_Color) {0x00, 0xff, 0xff, 0xff}, "%" SDL_PRIu32 " %" SDL_PRIu32, i, ctx->sorted_frames[i]);
 	}
 #endif
 	SDL_SetRenderDrawColor(ctx->renderer, 0x22, 0x22, 0x22, 0xff);
@@ -719,7 +756,11 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	};
 	SDL_SetAppMetadata("Text editor", "1.0", "c4ll.text-editor");
 	if (!SDL_Init(SDL_INIT_VIDEO)) {
-		SDL_LogError(0, "Couldn't initialize SDL: %s", SDL_GetError());
+		SDL_LogCritical(0, "Couldn't initialize SDL: %s", SDL_GetError());
+		return SDL_APP_FAILURE;
+	}
+	if (!TTF_Init()) {
+		SDL_LogCritical(0, "Can't init TTF: %s\n", SDL_GetError());
 		return SDL_APP_FAILURE;
 	}
 	TextBuffer *buffer = allocate_buffer(ctx, "scratch");
@@ -741,12 +782,29 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	if (log_frame == (Uint32)-1) {
 		SDL_LogError(0, "Can't create log frame");
 	}
-	SDL_SetLogOutputFunction(log_handler, ctx);
 	Uint64 window_flags = SDL_WINDOW_RESIZABLE;
 	if (!SDL_CreateWindowAndRenderer("editor", ctx->win_w, ctx->win_h, window_flags, &ctx->window, &ctx->renderer)) {
 		SDL_Log("Error, can't init renderer: %s", SDL_GetError());
 		return SDL_APP_FAILURE;
 	}
+	const char *fontpath = "/usr/share/fonts/TTF/liberation/LiberationMono-Regular.ttf";
+	ctx->font_size = 12;
+	ctx->line_height = ctx->font_size * 1.2;
+	ctx->font = TTF_OpenFont(fontpath, ctx->font_size);
+	if (ctx->font == NULL) {
+		SDL_LogCritical(0, "Can't open font \"%s\": %s", fontpath, SDL_GetError());
+		return SDL_APP_FAILURE;
+	}
+	int font_width_int;
+	TTF_GetGlyphMetrics(ctx->font, 'w', NULL, NULL, NULL, NULL, &font_width_int);
+	ctx->font_width = (float)font_width_int;
+	/*
+	ctx->text_engine = TTF_CreateRendererTextEngine(ctx->renderer);
+	if (ctx->text_engine == NULL) {
+		SDL_LogCritical(0, "Can't create text engine: %s", SDL_GetError());
+		return SDL_APP_FAILURE;
+	}
+	*/
 	if (!SDL_SetRenderVSync(ctx->renderer, 1)) {
 		SDL_Log("Warning, can't enable vsync: %s", SDL_GetError());
 	}
@@ -756,6 +814,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	ctx->frames[ctx->focused_frame].cursor = strlen(text);
 #endif
 	ctx->should_render = true;
+	SDL_SetLogOutputFunction(log_handler, ctx);
 	return SDL_APP_CONTINUE;
 }
 
