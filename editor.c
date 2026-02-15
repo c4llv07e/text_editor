@@ -14,7 +14,9 @@
 		- rectangular selection doesn't work.
 */
 
+#define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_main.h>
 
 #define TEXT_CHUNK_SIZE 256
 #define TAB_WIDTH 8
@@ -76,7 +78,6 @@ typedef struct Ctx {
 	SDL_FPoint mouse_pos;
 	Uint64 last_render;
 	bool should_render;
-	bool running;
 	bool moving_col; // When cursor was just moving up and down
 	Uint32 buffers_count;
 	Uint32 buffers_capacity;
@@ -686,392 +687,400 @@ static void render(Ctx *ctx, bool debug_screen) {
 	ctx->render_rotate_fan = (ctx->render_rotate_fan + 1) % 4;
 }
 
-int main(int argc, char *argv[argc]) {
-	(void)argv;
-	Ctx ctx = {0};
-	ctx.win_w = 0x300;
-	ctx.win_h = 0x200;
-	ctx.debug_screen_rect = (SDL_FRect){
-		.x = ctx.win_w * 3/4,
-		.y = ctx.win_h * 1/20,
-		.w = ctx.win_w,
-		.h = ctx.win_h,
+SDL_AppResult SDL_AppIterate(void *appstate) {
+	Ctx *ctx = (Ctx *)appstate;
+	if (!SDL_TextInputActive(ctx->window)) {
+		SDL_StartTextInput(ctx->window);
+	}
+	ctx->keymod = SDL_GetModState();
+	if (ctx->should_render) {
+		render(ctx, false);
+	}
+	return SDL_APP_CONTINUE;
+}
+
+SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
+	(void) argc;
+	(void) argv;
+	Ctx *ctx;
+	ctx = *appstate = SDL_malloc(sizeof *ctx);
+	if (ctx == NULL) {
+		SDL_Log("Error, can't allocate ctx");
+		return SDL_APP_FAILURE;
+	}
+	*ctx = (Ctx) {0};
+	ctx->win_w = 0x300;
+	ctx->win_h = 0x200;
+	ctx->debug_screen_rect = (SDL_FRect){
+		.x = ctx->win_w * 3/4,
+		.y = ctx->win_h * 1/20,
+		.w = ctx->win_w,
+		.h = ctx->win_h,
 	};
 	SDL_SetAppMetadata("Text editor", "1.0", "c4ll.text-editor");
 	if (!SDL_Init(SDL_INIT_VIDEO)) {
 		SDL_LogError(0, "Couldn't initialize SDL: %s", SDL_GetError());
-		return -1;
+		return SDL_APP_FAILURE;
 	}
-	TextBuffer *buffer = allocate_buffer(&ctx, "scratch");
+	TextBuffer *buffer = allocate_buffer(ctx, "scratch");
 	if (buffer == NULL) {
 		SDL_Log("Error, can't allocate first buffer");
-		return -1;
+		return SDL_APP_FAILURE;
 	}
-	Uint32 main_frame = append_frame(&ctx, buffer, (SDL_FRect){0, 0, 0x300 / 2, 0x200});
+	Uint32 main_frame = append_frame(ctx, buffer, (SDL_FRect){0, 0, ctx->win_w / 2, ctx->win_h});
 	if (main_frame == (Uint32)-1) {
 		SDL_Log("Error, can't create first frame");
-		return -1;
+		return SDL_APP_FAILURE;
 	}
-	ctx.log_buffer = allocate_buffer(&ctx, "logs");
-	if (ctx.log_buffer == NULL) {
+	ctx->log_buffer = allocate_buffer(ctx, "logs");
+	if (ctx->log_buffer == NULL) {
 		SDL_LogError(0, "Can't create buffer for logs");
-		return -1;
+		return SDL_APP_FAILURE;
 	}
-	Uint32 log_frame = append_frame(&ctx, ctx.log_buffer, (SDL_FRect){0x300 / 2, 0, 0x300 / 2, 0x200});
+	Uint32 log_frame = append_frame(ctx, ctx->log_buffer, (SDL_FRect){0x300 / 2, 0, 0x300 / 2, 0x200});
 	if (log_frame == (Uint32)-1) {
 		SDL_LogError(0, "Can't create log frame");
 	}
-	SDL_SetLogOutputFunction(log_handler, &ctx);
+	SDL_SetLogOutputFunction(log_handler, ctx);
 	Uint64 window_flags = SDL_WINDOW_RESIZABLE;
-	if (!SDL_CreateWindowAndRenderer("test", ctx.win_w, ctx.win_h, window_flags, &ctx.window, &ctx.renderer)) {
+	if (!SDL_CreateWindowAndRenderer("editor", ctx->win_w, ctx->win_h, window_flags, &ctx->window, &ctx->renderer)) {
 		SDL_Log("Error, can't init renderer: %s", SDL_GetError());
-		return -1;
+		return SDL_APP_FAILURE;
 	}
-	if (!SDL_SetRenderVSync(ctx.renderer, 1)) {
+	if (!SDL_SetRenderVSync(ctx->renderer, 1)) {
 		SDL_Log("Warning, can't enable vsync: %s", SDL_GetError());
 	}
 #ifdef DEBUG
 	const char *text = "int main(void) {\n\treturn 0;\n}\n";
-	buffer_insert_text(&ctx, buffer, text, strlen(text), 0);
-	ctx.frames[ctx.focused_frame].cursor = strlen(text);
+	buffer_insert_text(ctx, buffer, text, strlen(text), 0);
+	ctx->frames[ctx->focused_frame].cursor = strlen(text);
 #endif
-	ctx.running = true;
-	ctx.should_render = true;
-	while (ctx.running) {
-		SDL_Event ev;
-		if (ctx.should_render || SDL_WaitEventTimeout(NULL, 150)) {
-			while (SDL_PollEvent(&ev)) {
-				Frame *current_frame = &ctx.frames[ctx.focused_frame];
-				switch (ev.type) {
-					case SDL_EVENT_QUIT: {
-						ctx.running = false;
+	ctx->should_render = true;
+	return SDL_APP_CONTINUE;
+}
+
+SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
+	Ctx *ctx = (Ctx *)appstate;
+	Frame *current_frame = &ctx->frames[ctx->focused_frame];
+	switch (event->type) {
+		case SDL_EVENT_QUIT: {
+			return SDL_APP_SUCCESS;
+		}; break;
+		case SDL_EVENT_KEY_DOWN: {
+			switch (event->key.scancode) {
+				case SDL_SCANCODE_LEFT: {
+					ctx->moving_col = false;
+					current_frame->scroll_lock = true;
+					if (current_frame->cursor > 0) current_frame->cursor -= 1;
+					ctx->debug_screen_rect.x -= 10;
+					ctx->should_render = true;
+				}; break;
+				case SDL_SCANCODE_RIGHT: {
+					ctx->moving_col = false;
+					current_frame->scroll_lock = true;
+					if (current_frame->cursor < current_frame->buffer->text_size) current_frame->cursor += 1;
+					ctx->debug_screen_rect.x += 10;
+					ctx->should_render = true;
+				}; break;
+				case SDL_SCANCODE_BACKSPACE: {
+					ctx->moving_col = false;
+					if (current_frame->cursor > 0 && current_frame->buffer->text_size > 0) {
+						SDL_memmove(current_frame->buffer->text + current_frame->cursor - 1,
+							current_frame->buffer->text + current_frame->cursor,
+							current_frame->buffer->text_size - current_frame->cursor + 1);
+						current_frame->cursor -= 1;
+						current_frame->buffer->text_size -= 1;
+						ctx->should_render = true;
+					}
+				}; break;
+				case SDL_SCANCODE_ESCAPE: {
+					if (current_frame->frame_type == Frame_Type_ask) {
+						current_frame->taken = false;
+						ctx->focused_frame = find_any_frame(ctx);
+						current_frame = &ctx->frames[ctx->focused_frame];
+						ctx->should_render = true;
 						break;
-					}; break;
-					case SDL_EVENT_KEY_DOWN: {
-						switch (ev.key.scancode) {
-							case SDL_SCANCODE_LEFT: {
-								ctx.moving_col = false;
-								current_frame->scroll_lock = true;
-								if (current_frame->cursor > 0) current_frame->cursor -= 1;
-								ctx.debug_screen_rect.x -= 10;
-								ctx.should_render = true;
-							}; break;
-							case SDL_SCANCODE_RIGHT: {
-								ctx.moving_col = false;
-								current_frame->scroll_lock = true;
-								if (current_frame->cursor < current_frame->buffer->text_size) current_frame->cursor += 1;
-								ctx.debug_screen_rect.x += 10;
-								ctx.should_render = true;
-							}; break;
-							case SDL_SCANCODE_BACKSPACE: {
-								ctx.moving_col = false;
-								if (current_frame->cursor > 0 && current_frame->buffer->text_size > 0) {
-									SDL_memmove(current_frame->buffer->text + current_frame->cursor - 1,
-										current_frame->buffer->text + current_frame->cursor,
-										current_frame->buffer->text_size - current_frame->cursor + 1);
-									current_frame->cursor -= 1;
-									current_frame->buffer->text_size -= 1;
-									ctx.should_render = true;
-								}
-							}; break;
-							case SDL_SCANCODE_ESCAPE: {
-								if (current_frame->frame_type == Frame_Type_ask) {
-									current_frame->taken = false;
-									ctx.focused_frame = find_any_frame(&ctx);
-									current_frame = &ctx.frames[ctx.focused_frame];
-									ctx.should_render = true;
-									break;
-								}
-							}; break;
-							case SDL_SCANCODE_RETURN: {
-								ctx.moving_col = false;
-								char nl = '\n';
-								if (current_frame->frame_type == Frame_Type_ask) {
-									if (current_frame->ask_option == Ask_Option_save) {
-										Frame *parent_frame = &ctx.frames[current_frame->parent_frame];
-										parent_frame->filename =
-											SDL_strndup(current_frame->buffer->text, current_frame->buffer->text_size);
-										current_frame->buffer->refcount -= 1;
-										current_frame->taken = false;
-										ctx.focused_frame = current_frame->parent_frame;
-										current_frame = &ctx.frames[ctx.focused_frame];
-										SDL_SaveFile(current_frame->filename, current_frame->buffer->text, current_frame->buffer->text_size);
-										SDL_LogInfo(0, "Saved buffer into %s", current_frame->filename);
-										ctx.should_render = true;
-									} else if (current_frame->ask_option == Ask_Option_open) {
-										Frame *parent_frame = &ctx.frames[current_frame->parent_frame];
-										parent_frame->filename =
-											SDL_strndup(current_frame->buffer->text, current_frame->buffer->text_size);
-										parent_frame->buffer->refcount -= 1;
-										parent_frame->buffer = allocate_buffer(&ctx, SDL_strdup(parent_frame->filename));
-										if (parent_frame->buffer == NULL) {
-											SDL_LogError(0, "Can't allocate buffer for this file");
-											return -1;
-										}
-										parent_frame->buffer->text = SDL_LoadFile(parent_frame->filename, &parent_frame->buffer->text_capacity);
-										parent_frame->buffer->text_size = parent_frame->buffer->text_capacity;
-										parent_frame->buffer->refcount += 1;
-										current_frame->taken = false;
-										current_frame->buffer->refcount -= 1;
-										ctx.focused_frame = current_frame->parent_frame;
-										current_frame = &ctx.frames[ctx.focused_frame];
-										ctx.should_render = true;
-									} else {
-										SDL_LogError(0, ("Unknown ask option: %" SDL_PRIu32), (Uint32)current_frame->ask_option);
-									}
-									break;
-								}
-								buffer_insert_text(&ctx, current_frame->buffer, &nl, 1, current_frame->cursor);
-								current_frame->cursor += 1;
-								ctx.should_render = true;
-							}; break;
-							case SDL_SCANCODE_TAB: {
-								ctx.moving_col = false;
-								char nl = '\t';
-								buffer_insert_text(&ctx, current_frame->buffer, &nl, 1, current_frame->cursor);
-								current_frame->cursor += 1;
-								ctx.should_render = true;
-							}; break;
-							case SDL_SCANCODE_UP: {
-								int row = 0;
-								current_frame->scroll_lock = true;
-								ctx.debug_screen_rect.y -= 10;
-								if (current_frame->cursor > 0) {
-									current_frame->cursor--;
-								}
-								while (current_frame->buffer->text[current_frame->cursor] != '\n' && current_frame->cursor > 0) {
-									if (current_frame->buffer->text[current_frame->cursor] == '\t') row += 4;
-									else row++;
-									current_frame->cursor--;
-								}
-								if (ctx.moving_col) row = ctx.last_row;
-								else ctx.last_row = row;
-								ctx.moving_col = true;
-								ctx.should_render = true;
-								if (current_frame->cursor == 0) break;
-								current_frame->cursor--;
-								while (current_frame->buffer->text[current_frame->cursor] != '\n' && current_frame->cursor > 0) {
-									current_frame->cursor--;
-								}
-								if (current_frame->buffer->text[current_frame->cursor] == '\n') current_frame->cursor++;
-								while (row > 0 && current_frame->buffer->text[current_frame->cursor] != '\n') {
-									if (current_frame->buffer->text[current_frame->cursor] == '\t') row -= TAB_WIDTH;
-									else row--;
-									current_frame->cursor++;
-								}
-							}; break;
-							case SDL_SCANCODE_DOWN: {
-								int row = 0;
-								current_frame->scroll_lock = true;
-								ctx.debug_screen_rect.y += 10;
-								if (current_frame->cursor > 0) {
-									current_frame->cursor--;
-								}
-								while (current_frame->buffer->text[current_frame->cursor] != '\n' && current_frame->cursor > 0) {
-									if (current_frame->buffer->text[current_frame->cursor] == '\t') row += 4;
-									else row++;
-									current_frame->cursor--;
-								}
-								if (ctx.moving_col) row = ctx.last_row;
-								else ctx.last_row = row;
-								ctx.moving_col = true;
-								ctx.should_render = true;
-								current_frame->cursor++;
-								while (current_frame->buffer->text[current_frame->cursor] != '\n' && current_frame->cursor < current_frame->buffer->text_size) {
-									current_frame->cursor++;
-								}
-								if (current_frame->cursor == current_frame->buffer->text_size) break;
-								current_frame->cursor++;
-								while (row > 0 && current_frame->cursor < current_frame->buffer->text_size && current_frame->buffer->text[current_frame->cursor] != '\n') {
-									if (current_frame->buffer->text[current_frame->cursor] == '\t') row -= TAB_WIDTH;
-									else row--;
-									current_frame->cursor++;
-								}
-							}; break;
-							default: {};
+					}
+				}; break;
+				case SDL_SCANCODE_RETURN: {
+					ctx->moving_col = false;
+					char nl = '\n';
+					if (current_frame->frame_type == Frame_Type_ask) {
+						if (current_frame->ask_option == Ask_Option_save) {
+							Frame *parent_frame = &ctx->frames[current_frame->parent_frame];
+							parent_frame->filename =
+								SDL_strndup(current_frame->buffer->text, current_frame->buffer->text_size);
+							current_frame->buffer->refcount -= 1;
+							current_frame->taken = false;
+							ctx->focused_frame = current_frame->parent_frame;
+							current_frame = &ctx->frames[ctx->focused_frame];
+							SDL_SaveFile(current_frame->filename, current_frame->buffer->text, current_frame->buffer->text_size);
+							SDL_LogInfo(0, "Saved buffer into %s", current_frame->filename);
+							ctx->should_render = true;
+						} else if (current_frame->ask_option == Ask_Option_open) {
+							Frame *parent_frame = &ctx->frames[current_frame->parent_frame];
+							parent_frame->filename =
+								SDL_strndup(current_frame->buffer->text, current_frame->buffer->text_size);
+							parent_frame->buffer->refcount -= 1;
+							parent_frame->buffer = allocate_buffer(ctx, SDL_strdup(parent_frame->filename));
+							if (parent_frame->buffer == NULL) {
+								SDL_LogError(0, "Can't allocate buffer for this file");
+								return SDL_APP_FAILURE;
+							}
+							parent_frame->buffer->text = SDL_LoadFile(parent_frame->filename, &parent_frame->buffer->text_capacity);
+							parent_frame->buffer->text_size = parent_frame->buffer->text_capacity;
+							parent_frame->buffer->refcount += 1;
+							current_frame->taken = false;
+							current_frame->buffer->refcount -= 1;
+							ctx->focused_frame = current_frame->parent_frame;
+							current_frame = &ctx->frames[ctx->focused_frame];
+							ctx->should_render = true;
+						} else {
+							SDL_LogError(0, ("Unknown ask option: %" SDL_PRIu32), (Uint32)current_frame->ask_option);
 						}
-						switch (ev.key.key) {
-							case SDLK_S: {
-								if (ctx.keymod & SDL_KMOD_CTRL) {
-									if (current_frame->filename == NULL || ctx.keymod & SDL_KMOD_SHIFT) {
-										Uint32 ask_frame = create_ask_frame(&ctx, Ask_Option_save, ctx.focused_frame);
-										if (ask_frame == (Uint32)-1) {
-											SDL_Log("Error, can't open ask frame");
-											break;
-										}
-										ctx.focused_frame = ask_frame;
-										current_frame = &ctx.frames[ctx.focused_frame];
-										ctx.should_render = true;
-									} else {
-										SDL_SaveFile(current_frame->filename, current_frame->buffer->text, current_frame->buffer->text_size);
-										SDL_LogInfo(0, "Saved buffer into %s", current_frame->filename);
-									}
-								}
-							}; break;
-							case SDLK_B: {
-								if (ctx.keymod & SDL_KMOD_ALT) {
-									current_frame->bounds.w /= 2;
-									SDL_FRect bounds = current_frame->bounds;
-									bounds.x += bounds.w;
-									Uint32 frame = append_frame(&ctx, current_frame->buffer, bounds);
-									if (frame == (Uint32)-1) {
-										SDL_Log("Error, can't open new frame");
-										break;
-									}
-									ctx.focused_frame = frame;
-									current_frame = &ctx.frames[ctx.focused_frame];
-									ctx.should_render = true;
-								}
-							}; break;
-							case SDLK_V: {
-								if (ctx.keymod & SDL_KMOD_ALT) {
-									current_frame->bounds.h /= 2;
-									SDL_FRect bounds = current_frame->bounds;
-									bounds.y += bounds.h;
-									Uint32 frame = append_frame(&ctx, current_frame->buffer, bounds);
-									if (frame == (Uint32)-1) {
-										SDL_Log("Error, can't open new frame");
-										break;
-									}
-									ctx.focused_frame = frame;
-									current_frame = &ctx.frames[ctx.focused_frame];
-									ctx.should_render = true;
-								}
-							}; break;
-							case SDLK_O: {
-								if (ctx.keymod & SDL_KMOD_CTRL) {
-									Uint32 ask_frame = create_ask_frame(&ctx, Ask_Option_open, ctx.focused_frame);
-									if (ask_frame == (Uint32)-1) {
-										SDL_Log("Error, can't open ask frame");
-										break;
-									}
-									ctx.focused_frame = ask_frame;
-									current_frame = &ctx.frames[ask_frame];
-									ctx.should_render = true;
-								} else if (ctx.keymod & SDL_KMOD_ALT) {
-									for (Uint32 i = ctx.focused_frame + 1; i != ctx.focused_frame; ++i) {
-										if (i > ctx.frames_count) i = 0;
-										if (!ctx.frames[i].taken) continue;
-										ctx.focused_frame = i;
-										current_frame = &ctx.frames[ctx.focused_frame];
-										ctx.should_render = true;
-										break;
-									}
-								}
-							}; break;
-						}
-						SDL_Scancode scancode = ev.key.scancode;
-						if (scancode > SDL_SCANCODE_UNKNOWN && scancode < SDL_SCANCODE_COUNT) {
-							ctx.keys[scancode] = ev.type == SDL_EVENT_KEY_DOWN;
-						}
-					} break;
-					case SDL_EVENT_KEY_UP: {
-						SDL_Scancode scancode = ev.key.scancode;
-						if (scancode > SDL_SCANCODE_UNKNOWN && scancode < SDL_SCANCODE_COUNT) {
-							ctx.keys[scancode] = ev.type == SDL_EVENT_KEY_DOWN;
-						}
-					}; break;
-					case SDL_EVENT_MOUSE_BUTTON_DOWN: {
-						SDL_FPoint point = {ev.button.x, ev.button.y};
-						if (ev.button.button == SDL_BUTTON_LEFT) {
-							if (ctx.keymod & SDL_KMOD_CTRL) {
-							} else if (ctx.keymod & SDL_KMOD_ALT) {
-							} else {
-								for (Uint32 i = 0; i < ctx.frames_count; ++i) {
-									Uint32 sframei = ctx.sorted_frames[i];
-									if (ctx.frames[sframei].is_global) continue;
-									SDL_FRect bounds;
-									get_frame_render_rect(&ctx, sframei, &bounds);
-									if (SDL_PointInRectFloat(&point, &bounds)) {
-										set_focused_frame(&ctx, sframei);
-										handle_frame_mouse_click(&ctx, sframei, point);
-										goto end;
-									}
-								}
-								for (Uint32 i = 0; i < ctx.frames_count; ++i) {
-									Uint32 sframei = ctx.sorted_frames[i];
-									if (!ctx.frames[sframei].is_global) continue;
-									SDL_FRect bounds;
-									get_frame_render_rect(&ctx, sframei, &bounds);
-									if (SDL_PointInRectFloat(&point, &bounds)) {
-										set_focused_frame(&ctx, sframei);
-										handle_frame_mouse_click(&ctx, sframei, point);
-										goto end;
-									}
-								}
-								end:
-								ctx.should_render = true;
+						break;
+					}
+					buffer_insert_text(ctx, current_frame->buffer, &nl, 1, current_frame->cursor);
+					current_frame->cursor += 1;
+					ctx->should_render = true;
+				}; break;
+				case SDL_SCANCODE_TAB: {
+					ctx->moving_col = false;
+					char nl = '\t';
+					buffer_insert_text(ctx, current_frame->buffer, &nl, 1, current_frame->cursor);
+					current_frame->cursor += 1;
+					ctx->should_render = true;
+				}; break;
+				case SDL_SCANCODE_UP: {
+					int row = 0;
+					current_frame->scroll_lock = true;
+					ctx->debug_screen_rect.y -= 10;
+					if (current_frame->cursor > 0) {
+						current_frame->cursor--;
+					}
+					while (current_frame->buffer->text[current_frame->cursor] != '\n' && current_frame->cursor > 0) {
+						if (current_frame->buffer->text[current_frame->cursor] == '\t') row += 4;
+						else row++;
+						current_frame->cursor--;
+					}
+					if (ctx->moving_col) row = ctx->last_row;
+					else ctx->last_row = row;
+					ctx->moving_col = true;
+					ctx->should_render = true;
+					if (current_frame->cursor == 0) break;
+					current_frame->cursor--;
+					while (current_frame->buffer->text[current_frame->cursor] != '\n' && current_frame->cursor > 0) {
+						current_frame->cursor--;
+					}
+					if (current_frame->buffer->text[current_frame->cursor] == '\n') current_frame->cursor++;
+					while (row > 0 && current_frame->buffer->text[current_frame->cursor] != '\n') {
+						if (current_frame->buffer->text[current_frame->cursor] == '\t') row -= TAB_WIDTH;
+						else row--;
+						current_frame->cursor++;
+					}
+				}; break;
+				case SDL_SCANCODE_DOWN: {
+					int row = 0;
+					current_frame->scroll_lock = true;
+					ctx->debug_screen_rect.y += 10;
+					if (current_frame->cursor > 0) {
+						current_frame->cursor--;
+					}
+					while (current_frame->buffer->text[current_frame->cursor] != '\n' && current_frame->cursor > 0) {
+						if (current_frame->buffer->text[current_frame->cursor] == '\t') row += 4;
+						else row++;
+						current_frame->cursor--;
+					}
+					if (ctx->moving_col) row = ctx->last_row;
+					else ctx->last_row = row;
+					ctx->moving_col = true;
+					ctx->should_render = true;
+					current_frame->cursor++;
+					while (current_frame->buffer->text[current_frame->cursor] != '\n' && current_frame->cursor < current_frame->buffer->text_size) {
+						current_frame->cursor++;
+					}
+					if (current_frame->cursor == current_frame->buffer->text_size) break;
+					current_frame->cursor++;
+					while (row > 0 && current_frame->cursor < current_frame->buffer->text_size && current_frame->buffer->text[current_frame->cursor] != '\n') {
+						if (current_frame->buffer->text[current_frame->cursor] == '\t') row -= TAB_WIDTH;
+						else row--;
+						current_frame->cursor++;
+					}
+				}; break;
+				default: {};
+			}
+			switch (event->key.key) {
+				case SDLK_S: {
+					if (ctx->keymod & SDL_KMOD_CTRL) {
+						if (current_frame->filename == NULL || ctx->keymod & SDL_KMOD_SHIFT) {
+							Uint32 ask_frame = create_ask_frame(ctx, Ask_Option_save, ctx->focused_frame);
+							if (ask_frame == (Uint32)-1) {
+								SDL_Log("Error, can't open ask frame");
 								break;
 							}
-						} else if (ev.button.button == SDL_BUTTON_MIDDLE) {
-							Uint64 time = SDL_GetTicks();
-							if (time - ctx.last_middle_click <= 300) {
-								ctx.transform = (SDL_FPoint){0};
-							}
-							ctx.last_middle_click = time;
-							ctx.should_render = true;
+							ctx->focused_frame = ask_frame;
+							current_frame = &ctx->frames[ctx->focused_frame];
+							ctx->should_render = true;
+						} else {
+							SDL_SaveFile(current_frame->filename, current_frame->buffer->text, current_frame->buffer->text_size);
+							SDL_LogInfo(0, "Saved buffer into %s", current_frame->filename);
 						}
-					}; break;
-					case SDL_EVENT_MOUSE_MOTION: {
-						ctx.mouse_pos.x = ev.motion.x;
-						ctx.mouse_pos.y = ev.motion.y;
-						if (ev.motion.state & SDL_BUTTON_MMASK) {
-							ctx.transform.x += ev.motion.xrel;
-							ctx.transform.y += ev.motion.yrel;
-							ctx.should_render = true;
-						} else if (ev.motion.state & SDL_BUTTON_LMASK) {
-							if (ctx.keymod & SDL_KMOD_CTRL) {
-								current_frame->bounds.x += ev.motion.xrel;
-								current_frame->bounds.y += ev.motion.yrel;
-								ctx.should_render = true;
-							}
-						} else if (ev.motion.state & SDL_BUTTON_RMASK) {
-							if (ctx.keymod & SDL_KMOD_CTRL) {
-								current_frame->bounds.w += ev.motion.xrel;
-								current_frame->bounds.h += ev.motion.yrel;
-								ctx.should_render = true;
-							}
+					}
+				}; break;
+				case SDLK_B: {
+					if (ctx->keymod & SDL_KMOD_ALT) {
+						current_frame->bounds.w /= 2;
+						SDL_FRect bounds = current_frame->bounds;
+						bounds.x += bounds.w;
+						Uint32 frame = append_frame(ctx, current_frame->buffer, bounds);
+						if (frame == (Uint32)-1) {
+							SDL_Log("Error, can't open new frame");
+							break;
 						}
-					} break;
-					case SDL_EVENT_MOUSE_WHEEL: {
-						current_frame->scroll.y += ev.wheel.y * 32;
-						current_frame->scroll_lock = true;
-						SDL_LogTrace(0, "Scroll %d to %f", ctx.focused_frame, current_frame->scroll.y);
-						ctx.should_render = true;
-					} break;
-					case SDL_EVENT_TEXT_INPUT: {
-						ctx.moving_col = false;
-						if (ctx.keymod & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) break;
-						buffer_insert_text(&ctx, current_frame->buffer, ev.text.text, SDL_strlen(ev.text.text), current_frame->cursor);
-						current_frame->cursor += SDL_strlen(ev.text.text);
-						ctx.should_render = true;
-					}; break;
-					case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
-						ctx.win_w = ev.window.data1;
-						ctx.win_h = ev.window.data2;
-						SDL_LogDebug(0, "Window resized to %ux%u", ctx.win_w, ctx.win_h);
-						ctx.should_render = 1;
-					} break;
-					case SDL_EVENT_WINDOW_EXPOSED: {
-						SDL_LogTrace(0, "Window exposed");
-						ctx.should_render = 1;
-					} break;
+						ctx->focused_frame = frame;
+						current_frame = &ctx->frames[ctx->focused_frame];
+						ctx->should_render = true;
+					}
+				}; break;
+				case SDLK_V: {
+					if (ctx->keymod & SDL_KMOD_ALT) {
+						current_frame->bounds.h /= 2;
+						SDL_FRect bounds = current_frame->bounds;
+						bounds.y += bounds.h;
+						Uint32 frame = append_frame(ctx, current_frame->buffer, bounds);
+						if (frame == (Uint32)-1) {
+							SDL_Log("Error, can't open new frame");
+							break;
+						}
+						ctx->focused_frame = frame;
+						current_frame = &ctx->frames[ctx->focused_frame];
+						ctx->should_render = true;
+					}
+				}; break;
+				case SDLK_O: {
+					if (ctx->keymod & SDL_KMOD_CTRL) {
+						Uint32 ask_frame = create_ask_frame(ctx, Ask_Option_open, ctx->focused_frame);
+						if (ask_frame == (Uint32)-1) {
+							SDL_Log("Error, can't open ask frame");
+							break;
+						}
+						ctx->focused_frame = ask_frame;
+						current_frame = &ctx->frames[ask_frame];
+						ctx->should_render = true;
+					} else if (ctx->keymod & SDL_KMOD_ALT) {
+						for (Uint32 i = ctx->focused_frame + 1; i != ctx->focused_frame; ++i) {
+							if (i > ctx->frames_count) i = 0;
+							if (!ctx->frames[i].taken) continue;
+							ctx->focused_frame = i;
+							current_frame = &ctx->frames[ctx->focused_frame];
+							ctx->should_render = true;
+							break;
+						}
+					}
+				}; break;
+			}
+			SDL_Scancode scancode = event->key.scancode;
+			if (scancode > SDL_SCANCODE_UNKNOWN && scancode < SDL_SCANCODE_COUNT) {
+				ctx->keys[scancode] = event->type == SDL_EVENT_KEY_DOWN;
+			}
+		} break;
+		case SDL_EVENT_KEY_UP: {
+			SDL_Scancode scancode = event->key.scancode;
+			if (scancode > SDL_SCANCODE_UNKNOWN && scancode < SDL_SCANCODE_COUNT) {
+				ctx->keys[scancode] = event->type == SDL_EVENT_KEY_DOWN;
+			}
+		}; break;
+		case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+			SDL_FPoint point = {event->button.x, event->button.y};
+			if (event->button.button == SDL_BUTTON_LEFT) {
+				if (ctx->keymod & SDL_KMOD_CTRL) {
+				} else if (ctx->keymod & SDL_KMOD_ALT) {
+				} else {
+					for (Uint32 i = 0; i < ctx->frames_count; ++i) {
+						Uint32 sframei = ctx->sorted_frames[i];
+						if (ctx->frames[sframei].is_global) continue;
+						SDL_FRect bounds;
+						get_frame_render_rect(ctx, sframei, &bounds);
+						if (SDL_PointInRectFloat(&point, &bounds)) {
+							set_focused_frame(ctx, sframei);
+							handle_frame_mouse_click(ctx, sframei, point);
+							goto end;
+						}
+					}
+					for (Uint32 i = 0; i < ctx->frames_count; ++i) {
+						Uint32 sframei = ctx->sorted_frames[i];
+						if (!ctx->frames[sframei].is_global) continue;
+						SDL_FRect bounds;
+						get_frame_render_rect(ctx, sframei, &bounds);
+						if (SDL_PointInRectFloat(&point, &bounds)) {
+							set_focused_frame(ctx, sframei);
+							handle_frame_mouse_click(ctx, sframei, point);
+							goto end;
+						}
+					}
+					end:
+					ctx->should_render = true;
+					break;
+				}
+			} else if (event->button.button == SDL_BUTTON_MIDDLE) {
+				Uint64 time = SDL_GetTicks();
+				if (time - ctx->last_middle_click <= 300) {
+					ctx->transform = (SDL_FPoint){0};
+				}
+				ctx->last_middle_click = time;
+				ctx->should_render = true;
+			}
+		}; break;
+		case SDL_EVENT_MOUSE_MOTION: {
+			ctx->mouse_pos.x = event->motion.x;
+			ctx->mouse_pos.y = event->motion.y;
+			if (event->motion.state & SDL_BUTTON_MMASK) {
+				ctx->transform.x += event->motion.xrel;
+				ctx->transform.y += event->motion.yrel;
+				ctx->should_render = true;
+			} else if (event->motion.state & SDL_BUTTON_LMASK) {
+				if (ctx->keymod & SDL_KMOD_CTRL) {
+					current_frame->bounds.x += event->motion.xrel;
+					current_frame->bounds.y += event->motion.yrel;
+					ctx->should_render = true;
+				}
+			} else if (event->motion.state & SDL_BUTTON_RMASK) {
+				if (ctx->keymod & SDL_KMOD_CTRL) {
+					current_frame->bounds.w += event->motion.xrel;
+					current_frame->bounds.h += event->motion.yrel;
+					ctx->should_render = true;
 				}
 			}
-		}
-		if (!SDL_TextInputActive(ctx.window)) {
-			SDL_StartTextInput(ctx.window);
-		}
-		ctx.keymod = SDL_GetModState();
-		if (!ctx.running) break;
-		// if (SDL_GetTicks() - ctx.last_render >= 1000) ctx.should_render = true;
-		if (ctx.should_render) {
-			render(&ctx, false);
-		}
+		} break;
+		case SDL_EVENT_MOUSE_WHEEL: {
+			current_frame->scroll.y += event->wheel.y * 32;
+			current_frame->scroll_lock = true;
+			SDL_LogTrace(0, "Scroll %d to %f", ctx->focused_frame, current_frame->scroll.y);
+			ctx->should_render = true;
+		} break;
+		case SDL_EVENT_TEXT_INPUT: {
+			ctx->moving_col = false;
+			if (ctx->keymod & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) break;
+			buffer_insert_text(ctx, current_frame->buffer, event->text.text, SDL_strlen(event->text.text), current_frame->cursor);
+			current_frame->cursor += SDL_strlen(event->text.text);
+			ctx->should_render = true;
+		}; break;
+		case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
+			ctx->win_w = event->window.data1;
+			ctx->win_h = event->window.data2;
+			SDL_LogDebug(0, "Window resized to %ux%u", ctx->win_w, ctx->win_h);
+			ctx->should_render = 1;
+		} break;
+		case SDL_EVENT_WINDOW_EXPOSED: {
+			SDL_LogTrace(0, "Window exposed");
+			ctx->should_render = 1;
+		} break;
 	}
-#ifdef DEBUG
-	// To make valgrind happy.
-	SDL_free(ctx.frames[ctx.focused_frame].buffer->text);
-#endif
-	return 0;
+	return SDL_APP_CONTINUE;
+}
+
+void SDL_AppQuit(void *appstate, SDL_AppResult result) {
+	(void) appstate;
+	(void) result;
+	// TODO(c4llv07e): Deallocate all buffers in debug for valgrind.
 }
