@@ -9,7 +9,7 @@ SUPER_DEBUG_ARGS="-lasan -ggdb -fsanitize=pointer-compare \
 DEBUG_ARGS="${DEBUG_ARGS} -DDEBUG_SORT=ON"
 DEBUG_ARGS="${DEBUG_ARGS} -DDEBUG_SCROLL=ON"
 DEBUG_ARGS="${DEBUG_ARGS} -DDEBUG_FILES=ON"
-# DEBUG_ARGS="${DEBUG_ARGS} -DDEBUG_BUFFERS=ON"
+DEBUG_ARGS="${DEBUG_ARGS} -DDEBUG_BUFFERS=ON"
 ARGS="-Wall -Wextra -pedantic -lSDL3_ttf -lSDL3 -Wno-missing-braces"
 ARGS="${DEBUG_ARGS} ${ARGS}"
 gcc -o editor editor.c ${ARGS} "${@}"

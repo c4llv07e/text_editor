@@ -7,4 +7,4 @@
 - Open images in frame
 - Open folders in frame
 - Possible layout like acme
-- Use untaken buffers and frames in array for new ones
+- Use ttf text engine

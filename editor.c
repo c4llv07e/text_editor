@@ -3,7 +3,6 @@
 	Each buffer stores unique pointer for text. For each file there should be only one buffer.
 	There's a global list of frames inside ctx.
 	Althrough ctx stores dynamic array of frames, frames shouldn't be moved or resized into smaller size.
-		- TODO(c4llv07e): Think about frames "defragmentation procedure".
 	"Ask buffer" (aka emacs minibuffer) should be the frame too to work with keybings.
 	Frame type should work as a smaill and controllable polymorphism, i.e. cast the meaning of the buffer,
 		not the "class".
@@ -557,7 +556,13 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 }
 
 static TextBuffer *allocate_buffer(Ctx *ctx, char *name) {
-	(void)ctx;
+	for (Uint32 i = 0; i < ctx->buffers_count; ++i) {
+		if (ctx->buffers[i].refcount > 0) continue;
+		ctx->buffers[i] = (TextBuffer){
+			.name = name,
+		};
+		return &ctx->buffers[i];
+	}
 	if (ctx->buffers_capacity <= ctx->buffers_count) {
 		size_t new_cap = ctx->buffers_capacity * 2;
 		if (new_cap == 0) {
@@ -572,8 +577,9 @@ static TextBuffer *allocate_buffer(Ctx *ctx, char *name) {
 		ctx->buffers_capacity = new_cap;
 	}
 	TextBuffer *buffer = &ctx->buffers[ctx->buffers_count++];
-	*buffer = (TextBuffer){0};
-	buffer->name = name;
+	*buffer = (TextBuffer){
+		.name = name,
+	};
 	return buffer;
 }
 
@@ -617,6 +623,18 @@ static bool handle_frame_mouse_click(Ctx *ctx, Uint32 frame, SDL_FPoint point) {
 }
 
 static Uint32 append_frame(Ctx *ctx, TextBuffer *buffer, SDL_FRect bounds) {
+	for (Uint32 i = 0; i < ctx->frames_count; ++i) {
+		if (ctx->frames[i].taken) continue;
+		ctx->frames[i] = (Frame){
+			.taken = true,
+			.cursor = 0,
+			.scroll = 0,
+			.bounds = bounds,
+			.buffer = buffer,
+		};
+		buffer->refcount += 1;
+		return i;
+	}
 	if (ctx->frames_capacity <= ctx->frames_count) {
 		size_t new_cap = ctx->frames_capacity * 2;
 		if (new_cap == 0) {
@@ -762,7 +780,9 @@ static void render(Ctx *ctx, bool debug_screen) {
 #endif
 #ifdef DEBUG_SORT
 	for (Uint32 i = 0; i < ctx->frames_count; ++i) {
-		draw_text_fmt(ctx, 400, ctx->line_height * i, (SDL_Color) {0x00, 0xff, 0xff, 0xff}, "%" SDL_PRIu32 " %" SDL_PRIu32, i, ctx->sorted_frames[i]);
+		SDL_Color color = {0x00, 0xff, 0xff, 0xff};
+		if (!ctx->frames[ctx->sorted_frames[i]].taken) color = (SDL_Color){0xff, 0xcc, 0xcc, 0xff};
+		draw_text_fmt(ctx, 400, ctx->line_height * i, color, "%" SDL_PRIu32 " %" SDL_PRIu32, i, ctx->sorted_frames[i]);
 	}
 #endif
 	SDL_SetRenderDrawColor(ctx->renderer, 0x22, 0x22, 0x22, 0xff);
@@ -918,6 +938,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 				case SDL_SCANCODE_ESCAPE: {
 					if (current_frame->frame_type == Frame_Type_ask) {
 						current_frame->taken = false;
+						current_frame->buffer->refcount -= 1;
 						ctx->focused_frame = find_any_frame(ctx);
 						current_frame = &ctx->frames[ctx->focused_frame];
 						ctx->should_render = true;
