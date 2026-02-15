@@ -30,6 +30,7 @@ typedef struct {
 } String;
 
 typedef struct {
+	char *name;
 	size_t text_size;
 	size_t text_capacity;
 	char *text;
@@ -75,6 +76,9 @@ typedef struct Ctx {
 	bool should_render;
 	bool running;
 	bool moving_col; // When cursor was just moving up and down
+	Uint32 buffers_count;
+	Uint32 buffers_capacity;
+	TextBuffer *buffers;
 	Uint32 frames_count;
 	Uint32 frames_capacity;
 	Frame *frames;
@@ -465,15 +469,24 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	});
 }
 
-static TextBuffer *allocate_buffer(Ctx *ctx) {
+static TextBuffer *allocate_buffer(Ctx *ctx, char *name) {
 	(void)ctx;
-	TextBuffer *buffer;
-	buffer = SDL_malloc(sizeof *buffer);
-	if (buffer == NULL) {
-		SDL_Log("Error, can't allocate buffer");
-		return NULL;
+	if (ctx->buffers_capacity <= ctx->buffers_count) {
+		size_t new_cap = ctx->buffers_capacity * 2;
+		if (new_cap == 0) {
+			new_cap = 8;
+		}
+		TextBuffer *new_buffers = SDL_realloc(ctx->buffers, new_cap * (sizeof *ctx->buffers));
+		if (new_buffers == NULL) {
+			SDL_Log("Can't reallocate buffers array");
+			return NULL;
+		}
+		ctx->buffers = new_buffers;
+		ctx->buffers_capacity = new_cap;
 	}
+	TextBuffer *buffer = &ctx->buffers[ctx->buffers_count++];
 	*buffer = (TextBuffer){0};
+	buffer->name = name;
 	return buffer;
 }
 
@@ -545,7 +558,7 @@ static Uint32 find_any_frame(Ctx *ctx) {
 		if (ctx->frames[i].taken) return i;
 	}
 	SDL_LogError(0, "No more frames, creating one");
-	TextBuffer *buffer = allocate_buffer(ctx);
+	TextBuffer *buffer = allocate_buffer(ctx, "scratch");
 	if (buffer == NULL) {
 		SDL_LogError(0, "Can't allocate buffer");
 		return -1;
@@ -554,7 +567,7 @@ static Uint32 find_any_frame(Ctx *ctx) {
 }
 
 static Uint32 create_ask_frame(Ctx *ctx, Ask_Option option, Uint32 parent) {
-	TextBuffer *buffer = allocate_buffer(ctx);
+	TextBuffer *buffer = allocate_buffer(ctx, "ask buffer");
 	if (buffer == NULL) {
 		SDL_Log("Error, can't allocate ask buffer");
 		return -1;
@@ -645,6 +658,12 @@ static void render(Ctx *ctx, bool debug_screen) {
 		if (!ctx->frames[sorted_frame].is_global) continue;
 		render_frame(ctx, sorted_frame);
 	}
+#ifdef DEBUG_BUFFERS
+	for (Uint32 i = 0; i < ctx->buffers_count; ++i) {
+		SDL_SetRenderDrawColor(ctx->renderer, 0xff, 0x00, 0xff, 0xff);
+		SDL_RenderDebugTextFormat(ctx->renderer, 200, LINE_HEIGHT * i, "%" SDL_PRIu32 " %s", i, ctx->buffers[i].name);
+	}
+#endif
 #ifdef DEBUG_SORT
 	for (Uint32 i = 0; i < ctx->frames_count; ++i) {
 		SDL_SetRenderDrawColor(ctx->renderer, 0x00, 0xff, 0xff, 0xff);
@@ -680,7 +699,7 @@ int main(int argc, char *argv[argc]) {
 		SDL_LogError(0, "Couldn't initialize SDL: %s", SDL_GetError());
 		return -1;
 	}
-	TextBuffer *buffer = allocate_buffer(&ctx);
+	TextBuffer *buffer = allocate_buffer(&ctx, "scratch");
 	if (buffer == NULL) {
 		SDL_Log("Error, can't allocate first buffer");
 		return -1;
@@ -690,7 +709,7 @@ int main(int argc, char *argv[argc]) {
 		SDL_Log("Error, can't create first frame");
 		return -1;
 	}
-	ctx.log_buffer = allocate_buffer(&ctx);
+	ctx.log_buffer = allocate_buffer(&ctx, "logs");
 	if (ctx.log_buffer == NULL) {
 		SDL_LogError(0, "Can't create buffer for logs");
 		return -1;
@@ -779,7 +798,7 @@ int main(int argc, char *argv[argc]) {
 										Frame *parent_frame = &ctx.frames[current_frame->parent_frame];
 										parent_frame->filename =
 											SDL_strndup(current_frame->buffer->text, current_frame->buffer->text_size);
-										parent_frame->buffer = allocate_buffer(&ctx);
+										parent_frame->buffer = allocate_buffer(&ctx, SDL_strdup(parent_frame->filename));
 										if (parent_frame->buffer == NULL) {
 											SDL_LogError(0, "Can't allocate buffer for this file");
 											return -1;

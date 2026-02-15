@@ -1,4 +1,5 @@
 - Use SDL Utf8 support
+	- Use SDL_ttf for ttf support
 - Fix memory leaks in save/open files
 - Handle save/open errors
 - Make global list of all buffers
@@ -11,3 +12,5 @@
 - Open images in frame
 - Open folders in frame
 - Possible layout like acme
+- Clamp cursor position to lines_bounds
+- Use untaken buffers and frames in array for new ones
