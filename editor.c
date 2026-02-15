@@ -31,6 +31,8 @@ typedef struct {
 
 typedef struct {
 	char *name;
+	// If <= 0, considered untaken
+	Sint32 refcount; // Must be changed by end receive function, not by allocate_buffer
 	size_t text_size;
 	size_t text_capacity;
 	char *text;
@@ -549,6 +551,7 @@ static Uint32 append_frame(Ctx *ctx, TextBuffer *buffer, SDL_FRect bounds) {
 		.bounds = bounds,
 		.buffer = buffer,
 	};
+	buffer->refcount += 1;
 	ctx->sorted_frames[frame_ind] = frame_ind;
 	return frame_ind;
 }
@@ -661,7 +664,7 @@ static void render(Ctx *ctx, bool debug_screen) {
 #ifdef DEBUG_BUFFERS
 	for (Uint32 i = 0; i < ctx->buffers_count; ++i) {
 		SDL_SetRenderDrawColor(ctx->renderer, 0xff, 0x00, 0xff, 0xff);
-		SDL_RenderDebugTextFormat(ctx->renderer, 200, LINE_HEIGHT * i, "%" SDL_PRIu32 " %s", i, ctx->buffers[i].name);
+		SDL_RenderDebugTextFormat(ctx->renderer, 200, LINE_HEIGHT * i, "%" SDL_PRIu32 " %" SDL_PRIs32 " %s", i, ctx->buffers[i].refcount, ctx->buffers[i].name);
 	}
 #endif
 #ifdef DEBUG_SORT
