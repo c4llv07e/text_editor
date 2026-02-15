@@ -230,12 +230,15 @@ static inline Uint32 coords_to_text_index(Ctx *ctx, size_t text_length, char tex
 	return ind;
 }
 
-static inline Uint32 bytes_to_visual(Ctx *ctx, size_t text_length, char text[text_length], Uint32 byte) {
-	Uint32 visual_char = 0;
+static inline Uint32 string_to_visual(Ctx *ctx, size_t text_length, const char text[text_length]) {
 	(void) ctx;
-	for (Uint32 ind = 0; ind < byte && ind < text_length; ++ind) {
-		if (text[ind] == '\t') {
-			visual_char += TAB_WIDTH;
+	Uint32 visual_char = 0;
+	if (text_length == 0) return 0;
+	while (true) {
+		Uint32 ch = SDL_StepUTF8(&text, &text_length);
+		if (ch == '\0') break;
+		if (ch == '\t') {
+			visual_char += 8;
 		} else {
 			visual_char += 1;
 		}
@@ -243,7 +246,7 @@ static inline Uint32 bytes_to_visual(Ctx *ctx, size_t text_length, char text[tex
 	return visual_char;
 }
 
-bool get_frame_render_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
+static bool get_frame_render_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
 	SDL_assert(bounds != NULL);
 	SDL_assert(ctx->frames_count >= frame);
 	SDL_FRect frame_bounds = ctx->frames[frame].bounds;
@@ -433,7 +436,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		if (line.text - text <= draw_frame->cursor &&
 			((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->cursor))) {
 			SDL_FPoint actual_cursor_pos = {
-				.x = line_bounds.x + bytes_to_visual(ctx, line.size, line.text, draw_frame->cursor - (line.text - text)) * ctx->font_width,
+				.x = line_bounds.x + string_to_visual(ctx, SDL_min(line.size, draw_frame->cursor - (line.text - text)), line.text) * ctx->font_width,
 				.y = line_bounds.y,
 			};
 			float speed = 0.4;
@@ -541,6 +544,14 @@ static void set_focused_frame(Ctx *ctx, Uint32 frame) {
 	ctx->sorted_frames[0] = first;
 }
 
+static char *utf8_go_forward(size_t text_size, char text[text_size], Uint32 count) {
+	for (; count != 0; --count) {
+		if (text_size <= 0) return text;
+		SDL_StepUTF8((const char **)&text, &text_size);
+	}
+	return text;
+}
+
 static bool handle_frame_mouse_click(Ctx *ctx, Uint32 frame, SDL_FPoint point) {
 	SDL_FRect bounds;
 	Frame *draw_frame = &ctx->frames[frame];
@@ -558,7 +569,8 @@ static bool handle_frame_mouse_click(Ctx *ctx, Uint32 frame, SDL_FPoint point) {
 	}
 	// Don't fucking reallocate sized strings which only point is zero copy.
 	SDL_assert(line.text >= draw_frame->buffer->text && line.text <= draw_frame->buffer->text + draw_frame->buffer->text_size);
-	draw_frame->cursor = line.text - draw_frame->buffer->text + coords_to_text_index(ctx, line.size, line.text, point.x - bounds.x);
+	Uint32 char_ind = coords_to_text_index(ctx, line.size, line.text, point.x - bounds.x);
+	draw_frame->cursor = utf8_go_forward(line.size, line.text, char_ind) - draw_frame->buffer->text;
 	return true;
 }
 
@@ -830,25 +842,33 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 				case SDL_SCANCODE_LEFT: {
 					ctx->moving_col = false;
 					current_frame->scroll_lock = true;
-					if (current_frame->cursor > 0) current_frame->cursor -= 1;
+					const char *text = &current_frame->buffer->text[current_frame->cursor];
+					SDL_StepBackUTF8(current_frame->buffer->text, &text);
+					current_frame->cursor = text - current_frame->buffer->text;
 					ctx->debug_screen_rect.x -= 10;
 					ctx->should_render = true;
 				}; break;
 				case SDL_SCANCODE_RIGHT: {
 					ctx->moving_col = false;
 					current_frame->scroll_lock = true;
-					if (current_frame->cursor < current_frame->buffer->text_size) current_frame->cursor += 1;
+					const char *text = &current_frame->buffer->text[current_frame->cursor];
+					size_t len = current_frame->buffer->text_size - current_frame->cursor;
+					SDL_StepUTF8(&text, &len);
+					current_frame->cursor = text - current_frame->buffer->text;
 					ctx->debug_screen_rect.x += 10;
 					ctx->should_render = true;
 				}; break;
 				case SDL_SCANCODE_BACKSPACE: {
 					ctx->moving_col = false;
 					if (current_frame->cursor > 0 && current_frame->buffer->text_size > 0) {
-						SDL_memmove(current_frame->buffer->text + current_frame->cursor - 1,
-							current_frame->buffer->text + current_frame->cursor,
-							current_frame->buffer->text_size - current_frame->cursor + 1);
-						current_frame->cursor -= 1;
-						current_frame->buffer->text_size -= 1;
+						const char *current = current_frame->buffer->text + current_frame->cursor;
+						const char *previous = current;
+						SDL_StepBackUTF8(current_frame->buffer->text, &previous);
+						size_t diff = current - previous;
+						SDL_memmove((char *)previous, current,
+							current_frame->buffer->text_size - current_frame->cursor + diff);
+						current_frame->cursor -= diff;
+						current_frame->buffer->text_size -= diff;
 						ctx->should_render = true;
 					}
 				}; break;
