@@ -888,7 +888,10 @@ int main(int argc, char *argv[argc]) {
 									current_frame->cursor++;
 								}
 							}; break;
-							case SDL_SCANCODE_S: {
+							default: {};
+						}
+						switch (ev.key.key) {
+							case SDLK_S: {
 								if (ctx.keymod & SDL_KMOD_CTRL) {
 									if (current_frame->filename == NULL || ctx.keymod & SDL_KMOD_SHIFT) {
 										Uint32 ask_frame = create_ask_frame(&ctx, Ask_Option_save, ctx.focused_frame);
@@ -905,7 +908,7 @@ int main(int argc, char *argv[argc]) {
 									}
 								}
 							}; break;
-							case SDL_SCANCODE_B: {
+							case SDLK_B: {
 								if (ctx.keymod & SDL_KMOD_ALT) {
 									current_frame->bounds.w /= 2;
 									SDL_FRect bounds = current_frame->bounds;
@@ -920,7 +923,7 @@ int main(int argc, char *argv[argc]) {
 									ctx.should_render = true;
 								}
 							}; break;
-							case SDL_SCANCODE_V: {
+							case SDLK_V: {
 								if (ctx.keymod & SDL_KMOD_ALT) {
 									current_frame->bounds.h /= 2;
 									SDL_FRect bounds = current_frame->bounds;
@@ -935,7 +938,7 @@ int main(int argc, char *argv[argc]) {
 									ctx.should_render = true;
 								}
 							}; break;
-							case SDL_SCANCODE_O: {
+							case SDLK_O: {
 								if (ctx.keymod & SDL_KMOD_CTRL) {
 									Uint32 ask_frame = create_ask_frame(&ctx, Ask_Option_open, ctx.focused_frame);
 									if (ask_frame == (Uint32)-1) {
@@ -956,7 +959,6 @@ int main(int argc, char *argv[argc]) {
 									}
 								}
 							}; break;
-							default: {};
 						}
 						SDL_Scancode scancode = ev.key.scancode;
 						if (scancode > SDL_SCANCODE_UNKNOWN && scancode < SDL_SCANCODE_COUNT) {

@@ -2,7 +2,6 @@
 	- Use SDL_ttf for ttf support
 - Fix memory leaks in save/open files
 - Handle save/open errors
-- Make global list of all buffers
 - Switch to SDL Main callbacks
 - Replace SDL_GetModState with event
 - Add delta time for render animations
