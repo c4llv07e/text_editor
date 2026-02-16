@@ -195,8 +195,8 @@ static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, siz
 			if (!ctx->frames[i].scroll_lock) {
 				Sint32 text_lines = (Sint32)count_lines(ctx, buffer->text_size, buffer->text);
 				Sint32 buffer_last_line = (Sint32)SDL_ceil((ctx->frames[i].bounds.h - ctx->frames[i].scroll.y) / ctx->line_height);
-				if (text_lines > buffer_last_line) {
-					ctx->frames[i].scroll.y = ctx->frames[i].bounds.h - text_lines * ctx->line_height;
+				if (text_lines >= buffer_last_line) {
+					ctx->frames[i].scroll.y = ctx->frames[i].bounds.h - (text_lines + 1) * ctx->line_height;
 				}
 			}
 		}
