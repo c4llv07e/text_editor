@@ -998,15 +998,35 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 		SDL_LogCritical(0, "Can't init TTF: %s\n", SDL_GetError());
 		return SDL_APP_FAILURE;
 	}
-	TextBuffer *buffer = allocate_buffer(ctx, "scratch");
-	if (buffer == NULL) {
-		SDL_Log("Error, can't allocate first buffer");
-		return SDL_APP_FAILURE;
+	TextBuffer *buffer;
+	if (argc <= 1) {
+		buffer = allocate_buffer(ctx, "scratch");
+		if (buffer == NULL) {
+			SDL_Log("Error, can't allocate first buffer");
+			return SDL_APP_FAILURE;
+		}
+	} else {
+		char *filepath = argv[1];
+		buffer = allocate_buffer(ctx, filepath);
+		if (buffer == NULL) {
+			SDL_Log("Error, can't allocate buffer for file");
+			return SDL_APP_FAILURE;
+		}
+		buffer->text = SDL_LoadFile(filepath, &buffer->text_capacity);
+		buffer->text_size = buffer->text_capacity;
+		if (buffer->text == NULL) {
+			SDL_LogInfo(0, "First file %s doesn't exists, creating", filepath);
+		} else {
+			SDL_LogInfo(0, "Opening first file %s", filepath);
+		}
 	}
 	Uint32 main_frame = append_frame(ctx, buffer, (SDL_FRect){0, 0, ctx->win_w / 2, ctx->win_h});
 	if (main_frame == (Uint32)-1) {
 		SDL_Log("Error, can't create first frame");
 		return SDL_APP_FAILURE;
+	}
+	if (argc > 1) {
+		ctx->frames[main_frame].filename = argv[1];
 	}
 	ctx->log_buffer = allocate_buffer(ctx, "logs");
 	if (ctx->log_buffer == NULL) {
@@ -1044,12 +1064,6 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	if (!SDL_SetRenderVSync(ctx->renderer, 1)) {
 		SDL_Log("Warning, can't enable vsync: %s", SDL_GetError());
 	}
-#ifdef DEBUG
-	char *text = "staoehustnoaeu\naosethsanoethu\nasoetnhuaosenhaoue\naoeuaoeuaoeu\naoeuaoeuaoeuaoeu";
-	buffer_insert_text(ctx, buffer, text, SDL_strlen(text), 0);
-	String line = get_line(ctx, SDL_strlen(text), text, 2);
-	ctx->frames[ctx->focused_frame].cursor = line.text - text + line.size;
-#endif
 	ctx->should_render = true;
 	SDL_SetLogOutputFunction(log_handler, ctx);
 	return SDL_APP_CONTINUE;

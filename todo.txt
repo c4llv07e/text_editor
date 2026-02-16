@@ -1,6 +1,5 @@
 - Replace SDL_GetModState with event
 - Add delta time for render animations
-- Open file in argv[1] if exists
 - Store layout in project file
 - Open images in frame
 - Open folders in frame
