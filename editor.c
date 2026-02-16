@@ -1166,6 +1166,11 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 				default: {};
 			}
 			switch (event->key.key) {
+				case SDLK_F: {
+					if (ctx->keymod & SDL_KMOD_CTRL) {
+						frame_next_char(ctx, ctx->focused_frame);
+					}
+				}; break;
 				case SDLK_S: {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
 						if (current_frame->filename == NULL || ctx->keymod & SDL_KMOD_SHIFT) {
@@ -1183,8 +1188,20 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						}
 					}
 				}; break;
+				case SDLK_P: {
+					if (ctx->keymod & SDL_KMOD_CTRL) {
+						frame_previous_line(ctx, ctx->focused_frame);
+					}
+				}; break;
+				case SDLK_N: {
+					if (ctx->keymod & SDL_KMOD_CTRL) {
+						frame_next_line(ctx, ctx->focused_frame);
+					}
+				}; break;
 				case SDLK_B: {
-					if (ctx->keymod & SDL_KMOD_ALT) {
+					if (ctx->keymod & SDL_KMOD_CTRL) {
+						frame_previous_char(ctx, ctx->focused_frame);
+					} else if (ctx->keymod & SDL_KMOD_ALT) {
 						current_frame->bounds.w /= 2;
 						SDL_FRect bounds = current_frame->bounds;
 						bounds.x += bounds.w;
