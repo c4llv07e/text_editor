@@ -955,6 +955,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 	Ctx *ctx = (Ctx *)appstate;
+	SDL_FRect bounds;
 	Frame *current_frame = &ctx->frames[ctx->focused_frame];
 	switch (event->type) {
 		case SDL_EVENT_QUIT: {
@@ -1081,7 +1082,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 					ctx->should_render = true;
 					if (SDL_StepBackUTF8(current_frame->buffer->text, &cur) == 0) {
 						current_frame->cursor = 0;
-						break;
+						goto up_fix_scroll;
 					}
 					while (true) {
 						Uint32 cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
@@ -1094,6 +1095,13 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						else row -= 1;
 					}
 					current_frame->cursor = cur - current_frame->buffer->text;
+					up_fix_scroll:
+					get_frame_render_text_rect(ctx, ctx->focused_frame, &bounds);
+					Uint32 line_start = SDL_floor((-current_frame->scroll.y) / ctx->line_height);
+					String start_line = get_line(ctx, current_frame->buffer->text_size, current_frame->buffer->text, line_start);
+					if (start_line.text != NULL && start_line.text - current_frame->buffer->text > current_frame->cursor) {
+						current_frame->scroll.y = -((line_start * ctx->line_height) - bounds.h);
+					}
 				}; break;
 				case SDL_SCANCODE_DOWN: {
 					int row = 0;
@@ -1125,6 +1133,13 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 					}
 					if (cp == '\n') SDL_StepBackUTF8(current_frame->buffer->text, &cur);
 					current_frame->cursor = cur - current_frame->buffer->text;
+					get_frame_render_text_rect(ctx, ctx->focused_frame, &bounds);
+					Sint32 line_end = SDL_floor((bounds.h - SDL_min(0, current_frame->scroll.y)) / ctx->line_height);
+					if (line_end < 0) line_end = 0;
+					String end_line = get_line(ctx, current_frame->buffer->text_size, current_frame->buffer->text, line_end);
+					if (end_line.text != NULL && end_line.text - current_frame->buffer->text < current_frame->cursor) {
+						current_frame->scroll.y = -(line_end * ctx->line_height);
+					}
 				}; break;
 				default: {};
 			}
