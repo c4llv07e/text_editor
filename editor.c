@@ -595,6 +595,20 @@ static TextBuffer *allocate_buffer(Ctx *ctx, char *name) {
 	return buffer;
 }
 
+static inline float vec_len(const SDL_FPoint vec) {
+	return SDL_sqrt(vec.x * vec.x + vec.y * vec.y);
+}
+
+static inline float point_to_line_dist(SDL_FPoint point, SDL_FPoint start, SDL_FPoint end) {
+	SDL_FPoint rel_point = {point.x - start.x, point.y - start.y};
+	SDL_FPoint vec = {end.x - start.x, end.y - start.y};
+	SDL_FPoint norm_vec = {vec.x / vec_len(vec), vec.y / vec_len(vec)};
+	float dot_prod = SDL_min(SDL_fabs(norm_vec.x * rel_point.x + norm_vec.y * rel_point.y), vec_len(vec));
+	SDL_FPoint inter = {start.x + norm_vec.x * dot_prod, start.y + norm_vec.y * dot_prod};
+	SDL_FPoint dist_vec = {inter.x - point.x, inter.y - point.y};
+	return SDL_sqrt(dist_vec.x * dist_vec.x + dist_vec.y * dist_vec.y);
+}
+
 static void set_focused_frame(Ctx *ctx, Uint32 frame) {
 	ctx->focused_frame = frame;
 	Uint32 first = frame;
@@ -610,6 +624,39 @@ static char *utf8_go_forward(size_t text_size, char text[text_size], Uint32 coun
 		SDL_StepUTF8((const char **)&text, &text_size);
 	}
 	return text;
+}
+
+static bool generate_overflow_cursor(Ctx *ctx) {
+	SDL_Surface *cursor_overflow_surface = SDL_CreateSurface(ctx->font_width * 2, ctx->font_size * 2, SDL_PIXELFORMAT_RGBA8888);
+	if (!cursor_overflow_surface) {
+		SDL_LogWarn(0, "Error, can't create surface for cursor overflow texture: %s", SDL_GetError());
+		return false;
+	}
+	if (!SDL_LockSurface(cursor_overflow_surface)) {
+		SDL_LogWarn(0, "Can't lock cursor overflow cursor surface: %s", SDL_GetError());
+		SDL_DestroySurface(cursor_overflow_surface);
+		return false;
+	}
+	float width = 2.5;
+	float min_rot = SDL_min(cursor_overflow_surface->h / 2, cursor_overflow_surface->w) - width;
+	for (int y = 0; y < cursor_overflow_surface->h; ++y) {
+		for (int x = 0; x < cursor_overflow_surface->w; ++x) {
+			float dist1 = width - point_to_line_dist((SDL_FPoint){x, y+0.5}, (SDL_FPoint){2, 2}, (SDL_FPoint){min_rot, min_rot});
+			float dist2 = width - point_to_line_dist((SDL_FPoint){x, y+0.5}, (SDL_FPoint){2, min_rot * 2 - 2}, (SDL_FPoint){min_rot, min_rot});
+			float value = SDL_clamp(SDL_max(dist1, dist2) * 0xcc, 0x00, 0xff);
+			SDL_Color color = {value, value, value, value};
+			((Uint32 *)((Uint8 *)cursor_overflow_surface->pixels + y * cursor_overflow_surface->pitch))[x]
+				= SDL_MapSurfaceRGBA(cursor_overflow_surface, color.r, color.g, color.b, color.a);
+		}
+	}
+	SDL_UnlockSurface(cursor_overflow_surface);
+	ctx->overflow_cursor_texture = SDL_CreateTextureFromSurface(ctx->renderer, cursor_overflow_surface);
+	SDL_DestroySurface(cursor_overflow_surface);
+	if (ctx->overflow_cursor_texture == NULL) {
+		SDL_LogWarn(0, "Can't convert cursor overflow surface into texture: %s", SDL_GetError());
+		return false;
+	}
+	return true;
 }
 
 static bool handle_frame_mouse_click(Ctx *ctx, Uint32 frame, SDL_FPoint point) {
@@ -873,24 +920,13 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 		SDL_Log("Error, can't init renderer: %s", SDL_GetError());
 		return SDL_APP_FAILURE;
 	}
-	const char *fontpath = "/usr/share/fonts/TTF/liberation/LiberationMono-Regular.ttf";
 	ctx->font_size = 12;
 	ctx->line_height = ctx->font_size * 1.2;
+	const char *fontpath = "/usr/share/fonts/TTF/liberation/LiberationMono-Regular.ttf";
 	ctx->font = TTF_OpenFont(fontpath, ctx->font_size);
 	if (ctx->font == NULL) {
 		SDL_LogCritical(0, "Can't open font \"%s\": %s", fontpath, SDL_GetError());
 		return SDL_APP_FAILURE;
-	}
-	const char *overflow_cursor_path = "<UNKNOWN>";
-	SDL_Surface *overflow_cursor_surface = SDL_LoadSurface(overflow_cursor_path);
-	if (overflow_cursor_surface != NULL) {
-		ctx->overflow_cursor_texture = SDL_CreateTextureFromSurface(ctx->renderer, overflow_cursor_surface);
-		SDL_DestroySurface(overflow_cursor_surface);
-		if (ctx->overflow_cursor_texture == NULL) {
-			SDL_LogWarn(0, "Can't load texture for overflow cursor: %s", SDL_GetError());
-		}
-	} else {
-		SDL_LogWarn(0, "Can't load overflow cursor texture on %s: %s", overflow_cursor_path, SDL_GetError());
 	}
 	int font_width_int;
 	TTF_GetGlyphMetrics(ctx->font, 'w', NULL, NULL, NULL, NULL, &font_width_int);
@@ -902,6 +938,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 		return SDL_APP_FAILURE;
 	}
 	*/
+	generate_overflow_cursor(ctx);
 	if (!SDL_SetRenderVSync(ctx->renderer, 1)) {
 		SDL_Log("Warning, can't enable vsync: %s", SDL_GetError());
 	}
