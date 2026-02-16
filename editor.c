@@ -73,6 +73,7 @@ typedef struct Ctx {
 	float font_width;
 	float line_height;
 	Uint32 last_row;
+	SDL_Texture *overflow_cursor_texture;
 	int win_w, win_h;
 	bool keys[SDL_SCANCODE_COUNT];
 	TextBuffer *log_buffer;
@@ -499,7 +500,18 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			cursor_rect.w = SDL_max(0, cursor_rect.w);
 			cursor_rect.h = SDL_max(0, cursor_rect.h);
 			set_color(ctx, text_color);
-			if (ctx->focused_frame == frame) {
+			if (cursor_rect.x >= bounds.x + bounds.w) {
+				if (ctx->overflow_cursor_texture) {
+					cursor_rect.x = bounds.x + bounds.w - ctx->font_width * 1.5;
+					cursor_rect.w = ctx->font_width;
+					SDL_RenderTexture(ctx->renderer, ctx->overflow_cursor_texture, NULL, &cursor_rect);
+				} else {
+					cursor_rect.x = bounds.x + bounds.w - 12;
+					cursor_rect.w = 12;
+					set_color(ctx, debug_red);
+					SDL_RenderFillRect(ctx->renderer, &cursor_rect);
+				}
+			} else if (ctx->focused_frame == frame) {
 				SDL_RenderFillRect(ctx->renderer, &cursor_rect);
 			} else {
 				SDL_RenderRect(ctx->renderer, &cursor_rect);
@@ -869,6 +881,17 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 		SDL_LogCritical(0, "Can't open font \"%s\": %s", fontpath, SDL_GetError());
 		return SDL_APP_FAILURE;
 	}
+	const char *overflow_cursor_path = "<UNKNOWN>";
+	SDL_Surface *overflow_cursor_surface = SDL_LoadSurface(overflow_cursor_path);
+	if (overflow_cursor_surface != NULL) {
+		ctx->overflow_cursor_texture = SDL_CreateTextureFromSurface(ctx->renderer, overflow_cursor_surface);
+		SDL_DestroySurface(overflow_cursor_surface);
+		if (ctx->overflow_cursor_texture == NULL) {
+			SDL_LogWarn(0, "Can't load texture for overflow cursor: %s", SDL_GetError());
+		}
+	} else {
+		SDL_LogWarn(0, "Can't load overflow cursor texture on %s: %s", overflow_cursor_path, SDL_GetError());
+	}
 	int font_width_int;
 	TTF_GetGlyphMetrics(ctx->font, 'w', NULL, NULL, NULL, NULL, &font_width_int);
 	ctx->font_width = (float)font_width_int;
@@ -957,8 +980,11 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 							current_frame->taken = false;
 							ctx->focused_frame = current_frame->parent_frame;
 							current_frame = &ctx->frames[ctx->focused_frame];
-							SDL_SaveFile(current_frame->filename, current_frame->buffer->text, current_frame->buffer->text_size);
-							SDL_LogInfo(0, "Saved buffer into %s", current_frame->filename);
+							if (!SDL_SaveFile(current_frame->filename, current_frame->buffer->text, current_frame->buffer->text_size)) {
+								SDL_LogWarn(0, "Can't save buffer into %s: %s", current_frame->filename, SDL_GetError());
+							} else {
+								SDL_LogInfo(0, "Saved buffer into %s", current_frame->filename);
+							}
 							ctx->should_render = true;
 						} else if (current_frame->ask_option == Ask_Option_open) {
 							Frame *parent_frame = &ctx->frames[current_frame->parent_frame];
@@ -970,7 +996,13 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 								SDL_LogError(0, "Can't allocate buffer for this file");
 								return SDL_APP_FAILURE;
 							}
+							SDL_free(parent_frame->buffer->text);
 							parent_frame->buffer->text = SDL_LoadFile(parent_frame->filename, &parent_frame->buffer->text_capacity);
+							if (parent_frame->buffer->text == NULL) {
+								SDL_LogInfo(0, "File %s doesn't exists, creating", parent_frame->filename);
+							} else {
+								SDL_LogInfo(0, "Opened file %s", parent_frame->filename);
+							}
 							parent_frame->buffer->text_size = parent_frame->buffer->text_capacity;
 							parent_frame->buffer->refcount += 1;
 							current_frame->taken = false;

@@ -1,5 +1,3 @@
-- Fix memory leaks in save/open files
-- Handle save/open errors
 - Replace SDL_GetModState with event
 - Add delta time for render animations
 - Open file in argv[1] if exists
