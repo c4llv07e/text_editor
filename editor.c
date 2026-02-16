@@ -428,6 +428,108 @@ static Uint32 split_into_lines(Ctx *ctx, Uint32 strings_length, String strings[s
 	return SDL_max(0, line);
 }
 
+static void frame_previous_char(Ctx *ctx, Uint32 frame) {
+	Frame *current_frame = &ctx->frames[frame];
+	ctx->moving_col = false;
+	current_frame->scroll_lock = true;
+	const char *text = &current_frame->buffer->text[current_frame->cursor];
+	SDL_StepBackUTF8(current_frame->buffer->text, &text);
+	current_frame->cursor = text - current_frame->buffer->text;
+	ctx->should_render = true;
+}
+
+static void frame_next_char(Ctx *ctx, Uint32 frame) {
+	Frame *current_frame = &ctx->frames[frame];
+	ctx->moving_col = false;
+	current_frame->scroll_lock = true;
+	const char *text = &current_frame->buffer->text[current_frame->cursor];
+	size_t len = current_frame->buffer->text_size - current_frame->cursor;
+	SDL_StepUTF8(&text, &len);
+	current_frame->cursor = text - current_frame->buffer->text;
+	ctx->should_render = true;
+}
+
+static void frame_previous_line(Ctx *ctx, Uint32 frame) {
+	Frame *current_frame = &ctx->frames[frame];
+	int row = 0;
+	current_frame->scroll_lock = true;
+	SDL_FRect bounds;
+	const char *cur = current_frame->buffer->text + current_frame->cursor;
+	row += SDL_StepBackUTF8(current_frame->buffer->text, &cur) != 0;
+	while (cur != current_frame->buffer->text && *cur != '\n') {
+		Uint32 cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
+		if (cp == 0 || cp == '\n') break;
+		if (cp == '\t') row += TAB_WIDTH;
+		else row++;
+	}
+	if (ctx->moving_col) row = ctx->last_row;
+	else ctx->last_row = row;
+	ctx->moving_col = true;
+	ctx->should_render = true;
+	if (SDL_StepBackUTF8(current_frame->buffer->text, &cur) == 0) {
+		current_frame->cursor = 0;
+		goto up_fix_scroll;
+	}
+	while (true) {
+		Uint32 cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
+		if (cp == 0 || cp == '\n') break;
+	}
+	if (*cur == '\n') cur += 1;
+	while (row > 0 && *cur != '\n') {
+		Uint32 cp = SDL_StepUTF8(&cur, 0);
+		if (cp == '\t') row -= TAB_WIDTH;
+		else row -= 1;
+	}
+	current_frame->cursor = cur - current_frame->buffer->text;
+up_fix_scroll:
+	get_frame_render_text_rect(ctx, frame, &bounds);
+	Uint32 line_start = SDL_floor((-current_frame->scroll.y) / ctx->line_height);
+	String start_line = get_line(ctx, current_frame->buffer->text_size, current_frame->buffer->text, line_start);
+	if (start_line.text != NULL && start_line.text - current_frame->buffer->text > current_frame->cursor) {
+		current_frame->scroll.y = -((line_start * ctx->line_height) - bounds.h);
+	}
+}
+
+static void frame_next_line(Ctx *ctx, Uint32 frame) {
+	Frame *current_frame = &ctx->frames[frame];
+	int row = 0;
+	current_frame->scroll_lock = true;
+	const char *cur = current_frame->buffer->text + current_frame->cursor;
+	while (cur != current_frame->buffer->text) {
+		Uint32 cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
+		if (cp == 0 || cp == '\n') break;
+		if (cp == '\t') row += TAB_WIDTH;
+		else row++;
+	}
+	if (ctx->moving_col) row = ctx->last_row;
+	else ctx->last_row = row;
+	ctx->moving_col = true;
+	ctx->should_render = true;
+	SDL_StepUTF8(&cur, 0);
+	while (true) {
+		Uint32 cp = SDL_StepUTF8(&cur, 0);
+		if (cp == 0 || cp == '\n') break;
+	}
+	Uint32 cp;
+	while (true) {
+		if (row <= 0) break;
+		cp = SDL_StepUTF8(&cur, 0);
+		if (cp == '\t') row -= TAB_WIDTH;
+		else if (cp == '\n' || cp == 0) break;
+		else row -= 1;
+	}
+	if (cp == '\n') SDL_StepBackUTF8(current_frame->buffer->text, &cur);
+	current_frame->cursor = cur - current_frame->buffer->text;
+	SDL_FRect bounds;
+	get_frame_render_text_rect(ctx, frame, &bounds);
+	Sint32 line_end = SDL_floor((bounds.h - SDL_min(0, current_frame->scroll.y)) / ctx->line_height);
+	if (line_end < 0) line_end = 0;
+	String end_line = get_line(ctx, current_frame->buffer->text_size, current_frame->buffer->text, line_end);
+	if (end_line.text != NULL && end_line.text - current_frame->buffer->text < current_frame->cursor) {
+		current_frame->scroll.y = -(line_end * ctx->line_height);
+	}
+}
+
 static void render_frame(Ctx *ctx, Uint32 frame) {
 	String lines[0x100];
 	Frame *draw_frame = &ctx->frames[frame];
@@ -668,7 +770,7 @@ static bool handle_frame_mouse_click(Ctx *ctx, Uint32 frame, SDL_FPoint point) {
 		draw_frame->cursor = 0;
 		return true;
 	}
-	Uint32 linenum = (point.y - bounds.y) / ctx->line_height;
+	Uint32 linenum = (point.y - bounds.y - draw_frame->scroll.y) / ctx->line_height;
 	String line = get_line(ctx, draw_frame->buffer->text_size, draw_frame->buffer->text, (Uint32)linenum);
 	if (line.text == NULL) {
 		draw_frame->cursor = draw_frame->buffer->text_size;
@@ -955,7 +1057,6 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 	Ctx *ctx = (Ctx *)appstate;
-	SDL_FRect bounds;
 	Frame *current_frame = &ctx->frames[ctx->focused_frame];
 	switch (event->type) {
 		case SDL_EVENT_QUIT: {
@@ -964,23 +1065,12 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 		case SDL_EVENT_KEY_DOWN: {
 			switch (event->key.scancode) {
 				case SDL_SCANCODE_LEFT: {
-					ctx->moving_col = false;
-					current_frame->scroll_lock = true;
-					const char *text = &current_frame->buffer->text[current_frame->cursor];
-					SDL_StepBackUTF8(current_frame->buffer->text, &text);
-					current_frame->cursor = text - current_frame->buffer->text;
 					ctx->debug_screen_rect.x -= 10;
-					ctx->should_render = true;
+					frame_previous_char(ctx, ctx->focused_frame);
 				}; break;
 				case SDL_SCANCODE_RIGHT: {
-					ctx->moving_col = false;
-					current_frame->scroll_lock = true;
-					const char *text = &current_frame->buffer->text[current_frame->cursor];
-					size_t len = current_frame->buffer->text_size - current_frame->cursor;
-					SDL_StepUTF8(&text, &len);
-					current_frame->cursor = text - current_frame->buffer->text;
 					ctx->debug_screen_rect.x += 10;
-					ctx->should_render = true;
+					frame_next_char(ctx, ctx->focused_frame);
 				}; break;
 				case SDL_SCANCODE_BACKSPACE: {
 					ctx->moving_col = false;
@@ -1041,6 +1131,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 							} else {
 								SDL_LogInfo(0, "Opened file %s", parent_frame->filename);
 							}
+							parent_frame->cursor = 0;
 							parent_frame->buffer->text_size = parent_frame->buffer->text_capacity;
 							parent_frame->buffer->refcount += 1;
 							current_frame->taken = false;
@@ -1065,81 +1156,12 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 					ctx->should_render = true;
 				}; break;
 				case SDL_SCANCODE_UP: {
-					int row = 0;
-					current_frame->scroll_lock = true;
 					ctx->debug_screen_rect.y -= 10;
-					const char *cur = current_frame->buffer->text + current_frame->cursor;
-					row += SDL_StepBackUTF8(current_frame->buffer->text, &cur) != 0;
-					while (cur != current_frame->buffer->text && *cur != '\n') {
-						Uint32 cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
-						if (cp == 0 || cp == '\n') break;
-						if (cp == '\t') row += TAB_WIDTH;
-						else row++;
-					}
-					if (ctx->moving_col) row = ctx->last_row;
-					else ctx->last_row = row;
-					ctx->moving_col = true;
-					ctx->should_render = true;
-					if (SDL_StepBackUTF8(current_frame->buffer->text, &cur) == 0) {
-						current_frame->cursor = 0;
-						goto up_fix_scroll;
-					}
-					while (true) {
-						Uint32 cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
-						if (cp == 0 || cp == '\n') break;
-					}
-					if (*cur == '\n') cur += 1;
-					while (row > 0 && *cur != '\n') {
-						Uint32 cp = SDL_StepUTF8(&cur, 0);
-						if (cp == '\t') row -= TAB_WIDTH;
-						else row -= 1;
-					}
-					current_frame->cursor = cur - current_frame->buffer->text;
-					up_fix_scroll:
-					get_frame_render_text_rect(ctx, ctx->focused_frame, &bounds);
-					Uint32 line_start = SDL_floor((-current_frame->scroll.y) / ctx->line_height);
-					String start_line = get_line(ctx, current_frame->buffer->text_size, current_frame->buffer->text, line_start);
-					if (start_line.text != NULL && start_line.text - current_frame->buffer->text > current_frame->cursor) {
-						current_frame->scroll.y = -((line_start * ctx->line_height) - bounds.h);
-					}
+					frame_previous_line(ctx, ctx->focused_frame);
 				}; break;
 				case SDL_SCANCODE_DOWN: {
-					int row = 0;
-					current_frame->scroll_lock = true;
 					ctx->debug_screen_rect.y += 10;
-					const char *cur = current_frame->buffer->text + current_frame->cursor;
-					while (cur != current_frame->buffer->text) {
-						Uint32 cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
-						if (cp == 0 || cp == '\n') break;
-						if (cp == '\t') row += TAB_WIDTH;
-						else row++;
-					}
-					if (ctx->moving_col) row = ctx->last_row;
-					else ctx->last_row = row;
-					ctx->moving_col = true;
-					ctx->should_render = true;
-					SDL_StepUTF8(&cur, 0);
-					while (true) {
-						Uint32 cp = SDL_StepUTF8(&cur, 0);
-						if (cp == 0 || cp == '\n') break;
-					}
-					Uint32 cp;
-					while (true) {
-						if (row <= 0) break;
-						cp = SDL_StepUTF8(&cur, 0);
-						if (cp == '\t') row -= TAB_WIDTH;
-						else if (cp == '\n' || cp == 0) break;
-						else row -= 1;
-					}
-					if (cp == '\n') SDL_StepBackUTF8(current_frame->buffer->text, &cur);
-					current_frame->cursor = cur - current_frame->buffer->text;
-					get_frame_render_text_rect(ctx, ctx->focused_frame, &bounds);
-					Sint32 line_end = SDL_floor((bounds.h - SDL_min(0, current_frame->scroll.y)) / ctx->line_height);
-					if (line_end < 0) line_end = 0;
-					String end_line = get_line(ctx, current_frame->buffer->text_size, current_frame->buffer->text, line_end);
-					if (end_line.text != NULL && end_line.text - current_frame->buffer->text < current_frame->cursor) {
-						current_frame->scroll.y = -(line_end * ctx->line_height);
-					}
+					frame_next_line(ctx, ctx->focused_frame);
 				}; break;
 				default: {};
 			}
