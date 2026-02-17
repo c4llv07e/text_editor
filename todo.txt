@@ -9,3 +9,6 @@
 	- Use ring buffer like in emacs
 - Somehow fix multiple frames changing theirs cursors positions on edit
 - Running commands
+- Render spaces and tabs
+- Undo/Redo
+- Searching
