@@ -325,6 +325,7 @@ static inline bool get_frame_render_lines_numbers_rect(Ctx *ctx, Uint32 frame, S
 }
 
 static inline int draw_text(Ctx *ctx, float x, float y, SDL_Color color, size_t text_length, const char text[text_length]) {
+	if (text_length == 0) return 0;
 	SDL_Surface *surface = TTF_RenderText_Blended(ctx->font, text, text_length, color);
 	if (surface == NULL) {
 		SDL_LogWarn(0, "Can't render text |%.*s|: %s", (int)text_length, text, SDL_GetError());
@@ -370,10 +371,12 @@ static void render_line(Ctx *ctx, SDL_FRect frame, size_t text_size, const char 
 	size_t accum = 0;
 	if (text_size == 0) return;
 	while (text_size > 0 && accum < text_size) {
+		if (frame.w <= 0) break;
 		if (text[accum] == '\t') {
 			if (accum != 0) {
-				int offset = draw_text(ctx, frame.x, frame.y, text_color, accum, text);
+				int offset = draw_text(ctx, frame.x, frame.y, text_color, SDL_min(accum, frame.w / ctx->font_width), text);
 				frame.x += offset;
+				frame.w -= offset;
 			}
 			SDL_RenderTexture(ctx->renderer, ctx->tab_texture, NULL, &(SDL_FRect) {
 				.x = frame.x,
@@ -382,13 +385,15 @@ static void render_line(Ctx *ctx, SDL_FRect frame, size_t text_size, const char 
 				.h = ctx->font_size,
 			});
 			frame.x += ctx->font_width * TAB_WIDTH;
+			frame.w -= ctx->font_width * TAB_WIDTH;
 			text += accum + 1;
 			text_size -= accum + 1;
 			accum = 0;
 		} else if (text[accum] == ' ') {
 			if (accum != 0) {
-				int offset = draw_text(ctx, frame.x, frame.y, text_color, accum, text);
+				int offset = draw_text(ctx, frame.x, frame.y, text_color, SDL_min(accum, frame.w / ctx->font_width), text);
 				frame.x += offset;
+				frame.w -= offset;
 			}
 			SDL_RenderTexture(ctx->renderer, ctx->space_texture, NULL, &(SDL_FRect) {
 				.x = frame.x,
@@ -397,6 +402,7 @@ static void render_line(Ctx *ctx, SDL_FRect frame, size_t text_size, const char 
 				.h = ctx->font_size,
 			});
 			frame.x += ctx->font_width;
+			frame.w -= ctx->font_width;
 			text += accum + 1;
 			text_size -= accum + 1;
 			accum = 0;
@@ -404,8 +410,8 @@ static void render_line(Ctx *ctx, SDL_FRect frame, size_t text_size, const char 
 			accum += 1;
 		}
 	}
-	if (accum != 0) {
-		draw_text(ctx, frame.x, frame.y, text_color, accum, text);
+	if (accum != 0 && frame.w > 0) {
+		draw_text(ctx, frame.x, frame.y, text_color, SDL_min(accum, frame.w / ctx->font_width), text);
 	}
 }
 
@@ -652,7 +658,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			.w = lines_bounds.w,
 			.h = ctx->line_height,
 		};
-		if (line_bounds.y >= lines_bounds.y + lines_bounds.h) break;
+		if (line_bounds.y + line_bounds.h >= lines_bounds.y + lines_bounds.h) break;
 		String line = lines[linenum];
 		if (draw_frame->line_prefix != NULL) {
 			Uint32 prefix_size = SDL_utf8strlen(draw_frame->line_prefix);
@@ -724,7 +730,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	}
 	if (frame_has_line_numbers(ctx, frame)) {
 		SDL_Color current_color = line_number_color;
-		for (Uint32 linenum = line_start; (linenum - line_start) * ctx->line_height < lines_numbers_bounds.h; ++linenum) {
+		for (Uint32 linenum = line_start; (linenum - line_start + 1) * ctx->line_height < lines_numbers_bounds.h; ++linenum) {
 #ifdef LINE_NUMS_DIM_SPACE
 			if (linenum > lines_count + line_start || lines[linenum].size <= 0) current_color = line_number_dimmed_color;
 			else current_color = line_number_color;
