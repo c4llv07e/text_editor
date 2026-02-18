@@ -325,7 +325,7 @@ static inline bool get_frame_render_lines_numbers_rect(Ctx *ctx, Uint32 frame, S
 }
 
 static inline int draw_text(Ctx *ctx, float x, float y, SDL_Color color, size_t text_length, const char text[text_length]) {
-	if (text_length == 0) return 0;
+	if (text == NULL) return 0;
 	SDL_Surface *surface = TTF_RenderText_Blended(ctx->font, text, text_length, color);
 	if (surface == NULL) {
 		SDL_LogWarn(0, "Can't render text |%.*s|: %s", (int)text_length, text, SDL_GetError());
@@ -371,7 +371,7 @@ static void render_line(Ctx *ctx, SDL_FRect frame, size_t text_size, const char 
 	size_t accum = 0;
 	if (text_size == 0) return;
 	while (text_size > 0 && accum < text_size) {
-		if (frame.w <= 0) break;
+		if (SDL_floor(frame.w / ctx->font_width) <= 0) break;
 		if (text[accum] == '\t') {
 			if (accum != 0) {
 				int offset = draw_text(ctx, frame.x, frame.y, text_color, SDL_min(accum, frame.w / ctx->font_width), text);
