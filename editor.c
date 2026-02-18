@@ -62,6 +62,8 @@ typedef struct Frame {
 	SDL_FPoint scroll;
 	// I want edit one files in multiple frames, so cursor is needed here
 	Uint32 cursor;
+	Uint32 selection;
+	bool active_selection;
 	TextBuffer *buffer;
 } Frame;
 
@@ -103,6 +105,7 @@ typedef struct Ctx {
 
 static const SDL_Color text_color = {0xe6, 0xe6, 0xe6, SDL_ALPHA_OPAQUE};
 static const SDL_Color prefix_color = {0x86, 0xf6, 0x86, SDL_ALPHA_OPAQUE};
+static const SDL_Color selection_rect_color = {0xe6 / 3, 0xe6 / 2, 0xe6 / 3, SDL_ALPHA_OPAQUE};
 static const SDL_Color line_number_color = {0xe6 / 2, 0xe6 / 2, 0xe6 / 2, SDL_ALPHA_OPAQUE};
 static const SDL_Color line_number_dimmed_color = {0xe6 / 4, 0xe6 / 4, 0xe6 / 4, SDL_ALPHA_OPAQUE};
 static const SDL_Color background_color = {0x04, 0x04, 0x04, SDL_ALPHA_OPAQUE};
@@ -209,6 +212,7 @@ static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, siz
 		if (ctx->frames[i].buffer == buffer) {
 			if (ctx->frames[i].cursor == buffer->text_size - 1) ctx->frames[i].scroll_lock = false;
 			if (ctx->frames[i].cursor >= pos) ctx->frames[i].cursor += in_len;
+			if (ctx->frames[i].selection >= pos) ctx->frames[i].selection += in_len;
 			if (frame_is_multiline(ctx, i)) {
 				if (!ctx->frames[i].scroll_lock) {
 					Sint32 text_lines = (Sint32)count_lines(ctx, buffer->text_size, buffer->text);
@@ -706,6 +710,17 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 				SDL_RenderRect(ctx->renderer, &cursor_rect);
 			}
 		}
+		if (line.text - text <= draw_frame->selection &&
+			((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->selection))) {
+			SDL_FRect selection_rect = {
+				.x = line_bounds.x + string_to_visual(ctx, SDL_min(line.size, draw_frame->selection - (line.text - text)), line.text) * ctx->font_width,
+				.y = line_bounds.y,
+				.w = ctx->font_width,
+				.h = ctx->font_size,
+			};
+			set_color(ctx, selection_rect_color);
+			SDL_RenderRect(ctx->renderer, &selection_rect);
+		}
 	}
 	if (frame_has_line_numbers(ctx, frame)) {
 		SDL_Color current_color = line_number_color;
@@ -975,6 +990,8 @@ static Uint32 append_frame(Ctx *ctx, TextBuffer *buffer, SDL_FRect bounds) {
 	ctx->frames[frame_ind] = (Frame){
 		.taken = true,
 		.cursor = 0,
+		.selection = 0,
+		.active_selection = false,
 		.scroll = 0,
 		.bounds = bounds,
 		.buffer = buffer,
@@ -1269,7 +1286,14 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						size_t diff = current - previous;
 						SDL_memmove((char *)previous, current,
 							current_frame->buffer->text_size - current_frame->cursor + diff);
-						current_frame->cursor -= diff;
+						for (Uint32 i = 0; i < ctx->frames_count; ++i) {
+							if (!ctx->frames[i].taken) continue;
+							if (ctx->frames[i].buffer != current_frame->buffer) continue;
+							if ((ctx->frames[i].buffer->text + ctx->frames[i].cursor) >= current)
+								ctx->frames[i].cursor -= diff;
+							if ((ctx->frames[i].buffer->text + ctx->frames[i].selection) >= current)
+								ctx->frames[i].selection -= diff;
+						}
 						current_frame->buffer->text_size -= diff;
 						ctx->should_render = true;
 					}
@@ -1353,6 +1377,11 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 				default: {};
 			}
 			switch (event->key.key) {
+				case SDLK_SPACE: {
+					current_frame->selection = current_frame->cursor;
+					current_frame->active_selection = true;
+					ctx->should_render = true;
+				} break;
 				case SDLK_F: {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
 						frame_next_char(ctx, ctx->focused_frame);
