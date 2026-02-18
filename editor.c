@@ -79,6 +79,8 @@ typedef struct Ctx {
 	TextBuffer *log_buffer;
 	SDL_Keymod keymod;
 	SDL_FPoint mouse_pos;
+	double deltatime;
+	double perf_freq;
 	Uint64 last_render;
 	bool should_render;
 	bool moving_col; // When cursor was just moving up and down
@@ -104,6 +106,7 @@ static const SDL_Color line_number_dimmed_color = {0xe6 / 4, 0xe6 / 4, 0xe6 / 4,
 static const SDL_Color background_color = {0x04, 0x04, 0x04, SDL_ALPHA_OPAQUE};
 static const SDL_Color background_lines_color = {0x00, 0x30, 0x00, SDL_ALPHA_OPAQUE};
 static const SDL_Color debug_red __attribute__((unused)) = {0xff, 0x00, 0x00, SDL_ALPHA_OPAQUE};
+static const SDL_Color debug_blue __attribute__((unused)) = {0x00, 0x00, 0xff, SDL_ALPHA_OPAQUE};
 
 static inline SDL_Color hsv_to_rgb(SDL_Color hsv) {
 	SDL_Color rgb = {0, 0, 0, hsv.a};
@@ -196,7 +199,7 @@ static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, siz
 				Sint32 text_lines = (Sint32)count_lines(ctx, buffer->text_size, buffer->text);
 				Sint32 buffer_last_line = (Sint32)SDL_ceil((ctx->frames[i].bounds.h - ctx->frames[i].scroll.y) / ctx->line_height);
 				if (text_lines >= buffer_last_line) {
-					ctx->frames[i].scroll.y = ctx->frames[i].bounds.h - (text_lines + 1) * ctx->line_height;
+					ctx->frames[i].scroll.y = ctx->frames[i].bounds.h - (text_lines + 5.0) * ctx->line_height;
 				}
 			}
 		}
@@ -547,8 +550,8 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		bounds.h,
 	});
 	if (SDL_fabs(ctx->frames[frame].scroll_interp.y - ctx->frames[frame].scroll.y) >= 0.01) {
-		float speed = 0.3;
-		ctx->frames[frame].scroll_interp.y = lerp(ctx->frames[frame].scroll_interp.y, ctx->frames[frame].scroll.y, speed);
+		float speed = 1;
+		ctx->frames[frame].scroll_interp.y = lerp(ctx->frames[frame].scroll_interp.y, ctx->frames[frame].scroll.y, speed * ctx->deltatime);
 		ctx->should_render = true;
 	}
 	Uint32 lines_count;
@@ -575,14 +578,14 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 				.x = line_bounds.x + string_to_visual(ctx, SDL_min(line.size, draw_frame->cursor - (line.text - text)), line.text) * ctx->font_width,
 				.y = line_bounds.y,
 			};
-			float speed = 0.4;
+			float speed = 50;
 			Uint32 width = 2;
 			if (ctx->focused_frame == frame &&
 				(((SDL_fabs(actual_cursor_pos.x - ctx->active_cursor_pos.x) >= 0.01) ||
 				  (SDL_fabs(actual_cursor_pos.y - ctx->active_cursor_pos.y) >= 0.01)))) {
-				width = SDL_max(width, SDL_log(SDL_abs(ctx->active_cursor_pos.x - lerp(ctx->active_cursor_pos.x, actual_cursor_pos.x, speed))) * 2);
-				ctx->active_cursor_pos.x = lerp(ctx->active_cursor_pos.x, actual_cursor_pos.x, speed);
-				ctx->active_cursor_pos.y = lerp(ctx->active_cursor_pos.y, actual_cursor_pos.y, speed);
+				width = SDL_max(width, SDL_log(SDL_abs(ctx->active_cursor_pos.x - lerp(ctx->active_cursor_pos.x, actual_cursor_pos.x, speed * ctx->deltatime))) * 2);
+				ctx->active_cursor_pos.x = lerp(ctx->active_cursor_pos.x, actual_cursor_pos.x, speed * ctx->deltatime);
+				ctx->active_cursor_pos.y = lerp(ctx->active_cursor_pos.y, actual_cursor_pos.y, speed * ctx->deltatime);
 				ctx->should_render = true;
 			}
 			SDL_FRect cursor_rect = {
@@ -955,12 +958,13 @@ static void render(Ctx *ctx, bool debug_screen) {
 		(ctx->render_rotate_fan % 2) * 0x10 / 2, (ctx->render_rotate_fan / 2) * 0x10 / 2, 0x10 / 2, 0x10 / 2,
 	});
 	SDL_RenderPresent(ctx->renderer);
-	ctx->last_render = SDL_GetTicks();
 	ctx->render_rotate_fan = (ctx->render_rotate_fan + 1) % 4;
 }
 
 SDL_AppResult SDL_AppIterate(void *appstate) {
 	Ctx *ctx = (Ctx *)appstate;
+	Uint64 current_time = SDL_GetPerformanceCounter();
+	ctx->deltatime = (current_time - ctx->last_render) / ctx->perf_freq;
 	if (!SDL_TextInputActive(ctx->window)) {
 		SDL_StartTextInput(ctx->window);
 	}
@@ -968,6 +972,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 	if (ctx->should_render) {
 		render(ctx, false);
 	}
+	ctx->last_render = current_time;
 	return SDL_APP_CONTINUE;
 }
 
@@ -1064,6 +1069,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	if (!SDL_SetRenderVSync(ctx->renderer, 1)) {
 		SDL_Log("Warning, can't enable vsync: %s", SDL_GetError());
 	}
+	ctx->perf_freq = (double)SDL_GetPerformanceFrequency();
 	ctx->should_render = true;
 	SDL_SetLogOutputFunction(log_handler, ctx);
 	return SDL_APP_CONTINUE;
