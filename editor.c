@@ -1467,8 +1467,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 			}
 		} break;
 		case SDL_EVENT_TEXT_INPUT: {
-			ctx->moving_col = false;
 			if (ctx->keymod & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) break;
+			ctx->moving_col = false;
 			buffer_insert_text(ctx, current_frame->buffer, event->text.text, SDL_strlen(event->text.text), current_frame->cursor);
 			ctx->should_render = true;
 		}; break;
