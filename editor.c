@@ -610,8 +610,8 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 				(((SDL_fabs(actual_cursor_pos.x - ctx->active_cursor_pos.x) >= 0.01) ||
 				  (SDL_fabs(actual_cursor_pos.y - ctx->active_cursor_pos.y) >= 0.01)))) {
 				width = SDL_max(width, SDL_log(SDL_abs(ctx->active_cursor_pos.x - lerp(ctx->active_cursor_pos.x, actual_cursor_pos.x, speed * ctx->deltatime))) * 2);
-				ctx->active_cursor_pos.x = lerp(ctx->active_cursor_pos.x, actual_cursor_pos.x, speed * ctx->deltatime);
-				ctx->active_cursor_pos.y = lerp(ctx->active_cursor_pos.y, actual_cursor_pos.y, speed * ctx->deltatime);
+				ctx->active_cursor_pos.x = lerp(ctx->active_cursor_pos.x, actual_cursor_pos.x, SDL_min(1, speed * ctx->deltatime));
+				ctx->active_cursor_pos.y = lerp(ctx->active_cursor_pos.y, actual_cursor_pos.y, SDL_min(1, speed * ctx->deltatime));
 				ctx->should_render = true;
 			}
 			SDL_FRect cursor_rect = {
@@ -1099,6 +1099,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 		.w = ctx->win_w,
 		.h = ctx->win_h,
 	};
+	ctx->active_cursor_pos = (SDL_FPoint){0};
 	SDL_SetAppMetadata("Text editor", "1.0", "c4ll.text-editor");
 	if (!SDL_Init(SDL_INIT_VIDEO)) {
 		SDL_LogCritical(0, "Couldn't initialize SDL: %s", SDL_GetError());
@@ -1178,6 +1179,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 		SDL_Log("Warning, can't enable vsync: %s", SDL_GetError());
 	}
 	ctx->perf_freq = (double)SDL_GetPerformanceFrequency();
+	ctx->last_render = SDL_GetPerformanceCounter();
 	ctx->should_render = true;
 	SDL_SetLogOutputFunction(log_handler, ctx);
 	return SDL_APP_CONTINUE;
