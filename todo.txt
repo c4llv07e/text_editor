@@ -2,10 +2,8 @@
 - Open folders in frame
 - Possible layout like acme
 - Use ttf text engine
-- Selecting
-	- Use ring buffer like in emacs
+- Use ring buffer selection like in emacs
 - Running commands
-- Undo/Redo
 - Searching
 
 After complete layouting
