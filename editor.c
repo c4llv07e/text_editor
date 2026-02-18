@@ -73,6 +73,8 @@ typedef struct Ctx {
 	float font_width;
 	float line_height;
 	Uint32 last_row;
+	SDL_Texture *space_texture;
+	SDL_Texture *tab_texture;
 	SDL_Texture *overflow_cursor_texture;
 	int win_w, win_h;
 	bool keys[SDL_SCANCODE_COUNT];
@@ -107,6 +109,7 @@ static const SDL_Color background_color = {0x04, 0x04, 0x04, SDL_ALPHA_OPAQUE};
 static const SDL_Color background_lines_color = {0x00, 0x30, 0x00, SDL_ALPHA_OPAQUE};
 static const SDL_Color debug_red __attribute__((unused)) = {0xff, 0x00, 0x00, SDL_ALPHA_OPAQUE};
 static const SDL_Color debug_blue __attribute__((unused)) = {0x00, 0x00, 0xff, SDL_ALPHA_OPAQUE};
+static const SDL_Color debug_black __attribute__((unused)) = {0x00, 0x00, 0x00, SDL_ALPHA_OPAQUE};
 
 static inline SDL_Color hsv_to_rgb(SDL_Color hsv) {
 	SDL_Color rgb = {0, 0, 0, hsv.a};
@@ -315,11 +318,11 @@ static inline bool get_frame_render_lines_numbers_rect(Ctx *ctx, Uint32 frame, S
 	return true;
 }
 
-static inline bool draw_text(Ctx *ctx, float x, float y, SDL_Color color, size_t text_length, const char text[text_length]) {
+static inline int draw_text(Ctx *ctx, float x, float y, SDL_Color color, size_t text_length, const char text[text_length]) {
 	SDL_Surface *surface = TTF_RenderText_Blended(ctx->font, text, text_length, color);
 	if (surface == NULL) {
 		SDL_LogWarn(0, "Can't render text |%.*s|: %s", (int)text_length, text, SDL_GetError());
-		return false;
+		return 0;
 	}
 	SDL_assert(surface != NULL);
 	SDL_Texture *texture = SDL_CreateTextureFromSurface(ctx->renderer, surface);
@@ -331,12 +334,13 @@ static inline bool draw_text(Ctx *ctx, float x, float y, SDL_Color color, size_t
 		.w = texture->w,
 		.h = texture->h,
 	});
+	int res = texture->w;
 	SDL_DestroyTexture(texture);
-	return true;
+	return res;
 }
 
-static inline bool draw_text_fmt(Ctx *ctx, float x, float y, SDL_Color color, SDL_PRINTF_FORMAT_STRING const char *fmt, ...) SDL_PRINTF_VARARG_FUNC(5);
-static inline bool draw_text_fmt(Ctx *ctx, float x, float y, SDL_Color color, SDL_PRINTF_FORMAT_STRING const char *fmt, ...) {
+static inline int draw_text_fmt(Ctx *ctx, float x, float y, SDL_Color color, SDL_PRINTF_FORMAT_STRING const char *fmt, ...) SDL_PRINTF_VARARG_FUNC(5);
+static inline int draw_text_fmt(Ctx *ctx, float x, float y, SDL_Color color, SDL_PRINTF_FORMAT_STRING const char *fmt, ...) {
 	va_list ap;
 	va_start(ap, fmt);
 	if (SDL_strcmp(fmt, "%s") == 0) {
@@ -351,27 +355,52 @@ static inline bool draw_text_fmt(Ctx *ctx, float x, float y, SDL_Color color, SD
 		SDL_LogWarn(0, "Can't allocate with vasprintf format |%s|", fmt);
 		return false;
 	}
-	bool ret = draw_text(ctx, x, y, color, rc, str);
+	int ret = draw_text(ctx, x, y, color, rc, str);
 	SDL_free(str);
 	return ret;
 }
 
-static void render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t len) {
-	char tmp[1024];
-	size_t out = 0;
-	if (len == 0) return;
-	for (size_t i = 0; i < len && out < sizeof(tmp) - 1 && out < SDL_floor(frame.w / ctx->font_width); ++i) {
-		if (buffer[i] == '\t') {
-			for (int s = 0; s < TAB_WIDTH && out < sizeof(tmp) - 1; ++s) {
-				tmp[out++] = ' ';
+static void render_line(Ctx *ctx, SDL_FRect frame, size_t text_size, const char text[text_size]) {
+	size_t accum = 0;
+	if (text_size == 0) return;
+	while (text_size > 0 && accum < text_size) {
+		if (text[accum] == '\t') {
+			if (accum != 0) {
+				int offset = draw_text(ctx, frame.x, frame.y, text_color, accum, text);
+				frame.x += offset;
 			}
+			SDL_RenderTexture(ctx->renderer, ctx->tab_texture, NULL, &(SDL_FRect) {
+				.x = frame.x,
+				.y = frame.y,
+				.w = ctx->font_width * TAB_WIDTH,
+				.h = ctx->font_size,
+			});
+			frame.x += ctx->font_width * TAB_WIDTH;
+			text += accum + 1;
+			text_size -= accum + 1;
+			accum = 0;
+		} else if (text[accum] == ' ') {
+			if (accum != 0) {
+				int offset = draw_text(ctx, frame.x, frame.y, text_color, accum, text);
+				frame.x += offset;
+			}
+			SDL_RenderTexture(ctx->renderer, ctx->space_texture, NULL, &(SDL_FRect) {
+				.x = frame.x,
+				.y = frame.y,
+				.w = ctx->font_width,
+				.h = ctx->font_size,
+			});
+			frame.x += ctx->font_width;
+			text += accum + 1;
+			text_size -= accum + 1;
+			accum = 0;
 		} else {
-			tmp[out++] = buffer[i];
+			accum += 1;
 		}
 	}
-	tmp[out++] = '\0';
-	draw_text(ctx, frame.x, frame.y, text_color, out - 1, tmp);
-	return;
+	if (accum != 0) {
+		draw_text(ctx, frame.x, frame.y, text_color, accum, text);
+	}
 }
 
 static String get_line(Ctx *ctx, size_t text_size, char text[text_size], Uint32 linenum) {
@@ -568,7 +597,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			float prefix_width = prefix_size * ctx->font_width;
 			draw_text(ctx, line_bounds.x - prefix_width, line_bounds.y, prefix_color, prefix_size, draw_frame->line_prefix);
 		}
-		render_line(ctx, line_bounds, line.text, line.size);
+		render_line(ctx, line_bounds, line.size, line.text);
 		if (line.text - text <= draw_frame->cursor &&
 			((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->cursor))) {
 			SDL_FPoint actual_cursor_pos = {
@@ -767,6 +796,68 @@ static bool generate_overflow_cursor(Ctx *ctx) {
 	return true;
 }
 
+static bool generate_space_texture(Ctx *ctx) {
+	SDL_Surface *space_surface = SDL_CreateSurface(ctx->font_width, ctx->font_size, SDL_PIXELFORMAT_RGBA8888);
+	if (!space_surface) {
+		SDL_LogWarn(0, "Can't create surface for space texture: %s", SDL_GetError());
+		return false;
+	}
+	if (!SDL_LockSurface(space_surface)) {
+		SDL_LogWarn(0, "Can't lock space surface: %s", SDL_GetError());
+		SDL_DestroySurface(space_surface);
+		return false;
+	}
+	float width = 1.8;
+	SDL_FPoint center = {space_surface->w / 2, space_surface->h / 2.1};
+	for (int y = 0; y < space_surface->h; ++y) {
+		for (int x = 0; x < space_surface->w; ++x) {
+			float dist = width - SDL_sqrt((center.y - y) * (center.y - y) + (center.x - x) * (center.x - x));
+			float value = SDL_clamp(dist * 0xee, 0x00, 0xff);
+			SDL_Color color = {value, value, value, value / 2.2};
+			((Uint32 *)((Uint8 *)space_surface->pixels + y * space_surface->pitch))[x]
+				= SDL_MapSurfaceRGBA(space_surface, color.r, color.g, color.b, color.a);
+		}
+	}
+	SDL_UnlockSurface(space_surface);
+	ctx->space_texture = SDL_CreateTextureFromSurface(ctx->renderer, space_surface);
+	SDL_DestroySurface(space_surface);
+	if (ctx->space_texture == NULL) {
+		SDL_LogWarn(0, "Can't convert space surface into texture: %s", SDL_GetError());
+		return false;
+	}
+	return true;
+}
+
+static bool generate_tab_texture(Ctx *ctx) {
+	SDL_Surface *tab_surface = SDL_CreateSurface(ctx->font_width * TAB_WIDTH, ctx->font_size, SDL_PIXELFORMAT_RGBA8888);
+	if (!tab_surface) {
+		SDL_LogWarn(0, "Can't create surface for tab texture: %s", SDL_GetError());
+		return false;
+	}
+	if (!SDL_LockSurface(tab_surface)) {
+		SDL_LogWarn(0, "Can't lock tab surface: %s", SDL_GetError());
+		SDL_DestroySurface(tab_surface);
+		return false;
+	}
+	for (int y = 0; y < tab_surface->h; ++y) {
+		for (int x = 0; x < tab_surface->w; ++x) {
+			float x0 = (x == 0) * 0xff;
+			float value = SDL_clamp(x0, 0x00, 0xff);
+			SDL_Color color = {value, value, value, value};
+			((Uint32 *)((Uint8 *)tab_surface->pixels + y * tab_surface->pitch))[x]
+				= SDL_MapSurfaceRGBA(tab_surface, color.r, color.g, color.b, color.a);
+		}
+	}
+	SDL_UnlockSurface(tab_surface);
+	ctx->tab_texture = SDL_CreateTextureFromSurface(ctx->renderer, tab_surface);
+	SDL_DestroySurface(tab_surface);
+	if (ctx->tab_texture == NULL) {
+		SDL_LogWarn(0, "Can't convert tab surface into texture: %s", SDL_GetError());
+		return false;
+	}
+	return true;
+}
+
 static bool handle_frame_mouse_click(Ctx *ctx, Uint32 frame, SDL_FPoint point) {
 	SDL_FRect bounds;
 	Frame *draw_frame = &ctx->frames[frame];
@@ -960,6 +1051,17 @@ static void render(Ctx *ctx, bool debug_screen) {
 	SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
 		(ctx->render_rotate_fan % 2) * 0x10 / 2, (ctx->render_rotate_fan / 2) * 0x10 / 2, 0x10 / 2, 0x10 / 2,
 	});
+#if 0
+	SDL_FRect test_pos = {
+		.x = 10,
+		.y = 10,
+		.w = 10 * ctx->font_width * TAB_WIDTH,
+		.h = 10 * ctx->font_size,
+	};
+	set_color(ctx, debug_black);
+	SDL_RenderFillRect(ctx->renderer, &test_pos);
+	SDL_RenderTexture(ctx->renderer, ctx->tab_texture, NULL, &test_pos);
+#endif
 	SDL_RenderPresent(ctx->renderer);
 	ctx->render_rotate_fan = (ctx->render_rotate_fan + 1) % 4;
 }
@@ -1070,6 +1172,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	}
 	*/
 	generate_overflow_cursor(ctx);
+	generate_tab_texture(ctx);
+	generate_space_texture(ctx);
 	if (!SDL_SetRenderVSync(ctx->renderer, 1)) {
 		SDL_Log("Warning, can't enable vsync: %s", SDL_GetError());
 	}

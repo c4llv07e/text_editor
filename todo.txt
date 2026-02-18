@@ -5,7 +5,6 @@
 - Selecting
 	- Use ring buffer like in emacs
 - Running commands
-- Render spaces and tabs
 - Undo/Redo
 - Searching
 
