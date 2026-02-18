@@ -775,7 +775,7 @@ static bool handle_frame_mouse_click(Ctx *ctx, Uint32 frame, SDL_FPoint point) {
 		draw_frame->cursor = 0;
 		return true;
 	}
-	Uint32 linenum = (point.y - bounds.y - draw_frame->scroll.y) / ctx->line_height;
+	Uint32 linenum = (point.y - bounds.y - SDL_min(0, draw_frame->scroll_interp.y)) / ctx->line_height;
 	String line = get_line(ctx, draw_frame->buffer->text_size, draw_frame->buffer->text, (Uint32)linenum);
 	if (line.text == NULL) {
 		draw_frame->cursor = draw_frame->buffer->text_size;
