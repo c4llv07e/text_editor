@@ -663,7 +663,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			.w = lines_bounds.w,
 			.h = ctx->line_height,
 		};
-		if (line_bounds.y + line_bounds.h >= lines_bounds.y + lines_bounds.h) break;
+		if (line_bounds.y + line_bounds.h > lines_bounds.y + lines_bounds.h) break;
 		String line = lines[linenum];
 		if (draw_frame->line_prefix != NULL) {
 			Uint32 prefix_size = SDL_utf8strlen(draw_frame->line_prefix);
@@ -1501,6 +1501,50 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						ctx->should_render = true;
 					}
 				}; break;
+				case SDLK_W: {
+					if (ctx->keymod & SDL_KMOD_CTRL) {
+						current_frame->active_selection = false;
+						ctx->moving_col = false;
+						Uint32 selection_min = SDL_min(current_frame->cursor, current_frame->selection);
+						Uint32 selection_max = SDL_max(current_frame->cursor, current_frame->selection);
+						char ch = current_frame->buffer->text[selection_max];
+						current_frame->buffer->text[selection_max] = '\0';
+						SDL_SetClipboardText(current_frame->buffer->text + selection_min);
+						current_frame->buffer->text[selection_max] = ch;
+						const char *current = current_frame->buffer->text + selection_max;
+						const char *previous = current_frame->buffer->text + selection_min;
+						size_t diff = current - previous;
+						SDL_memmove((char *)previous, current,
+							current_frame->buffer->text_size - current_frame->cursor + diff);
+						for (Uint32 i = 0; i < ctx->frames_count; ++i) {
+							if (!ctx->frames[i].taken) continue;
+							if (ctx->frames[i].buffer != current_frame->buffer) continue;
+							if ((ctx->frames[i].buffer->text + ctx->frames[i].cursor) >= current)
+								ctx->frames[i].cursor -= diff;
+							if ((ctx->frames[i].buffer->text + ctx->frames[i].selection) >= current)
+								ctx->frames[i].selection -= diff;
+						}
+						current_frame->buffer->text_size -= diff;
+						ctx->should_render = true;
+					} else if (ctx->keymod & SDL_KMOD_ALT) {
+						current_frame->active_selection = false;
+						ctx->moving_col = false;
+						Uint32 selection_min = SDL_min(current_frame->cursor, current_frame->selection);
+						Uint32 selection_max = SDL_max(current_frame->cursor, current_frame->selection);
+						char ch = current_frame->buffer->text[selection_max];
+						current_frame->buffer->text[selection_max] = '\0';
+						SDL_SetClipboardText(current_frame->buffer->text + selection_min);
+						current_frame->buffer->text[selection_max] = ch;
+					}
+				} break;
+				case SDLK_Y: {
+					if (ctx->keymod & SDL_KMOD_CTRL) {
+						current_frame->active_selection = false;
+						char *text = SDL_GetClipboardText();
+						buffer_insert_text(ctx, current_frame->buffer, text, SDL_strlen(text), current_frame->cursor);
+						SDL_free(text);
+					}
+				} break;
 				case SDLK_V: {
 					if (ctx->keymod & SDL_KMOD_ALT) {
 						current_frame->bounds.h /= 2;
@@ -1637,6 +1681,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 		} break;
 		case SDL_EVENT_TEXT_INPUT: {
 			if (ctx->keymod & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) break;
+			current_frame->active_selection = false;
 			ctx->moving_col = false;
 			buffer_insert_text(ctx, current_frame->buffer, event->text.text, SDL_strlen(event->text.text), current_frame->cursor);
 			ctx->should_render = true;
