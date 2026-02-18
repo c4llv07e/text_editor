@@ -1,13 +1,13 @@
-- Replace SDL_GetModState with event
-- Store layout in project file
 - Open images in frame
 - Open folders in frame
 - Possible layout like acme
 - Use ttf text engine
 - Selecting
 	- Use ring buffer like in emacs
-- Somehow fix multiple frames changing theirs cursors positions on edit
 - Running commands
 - Render spaces and tabs
 - Undo/Redo
 - Searching
+
+After complete layouting
+- Store layout in project file

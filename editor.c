@@ -195,6 +195,7 @@ static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, siz
 		if (!ctx->frames[i].taken) continue;
 		if (ctx->frames[i].buffer == buffer) {
 			if (ctx->frames[i].cursor == buffer->text_size - 1) ctx->frames[i].scroll_lock = false;
+			if (ctx->frames[i].cursor >= pos) ctx->frames[i].cursor += in_len;
 			if (!ctx->frames[i].scroll_lock) {
 				Sint32 text_lines = (Sint32)count_lines(ctx, buffer->text_size, buffer->text);
 				Sint32 buffer_last_line = (Sint32)SDL_ceil((ctx->frames[i].bounds.h - ctx->frames[i].scroll.y) / ctx->line_height);
@@ -1034,6 +1035,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	}
 	if (argc > 1) {
 		ctx->frames[main_frame].filename = argv[1];
+		ctx->frames[main_frame].scroll_lock = true;
 	}
 	ctx->log_buffer = allocate_buffer(ctx, "logs");
 	if (ctx->log_buffer == NULL) {
@@ -1153,6 +1155,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 							} else {
 								SDL_LogInfo(0, "Opened file %s", parent_frame->filename);
 							}
+							parent_frame->scroll_lock = true;
 							parent_frame->cursor = 0;
 							parent_frame->buffer->text_size = parent_frame->buffer->text_capacity;
 							parent_frame->buffer->refcount += 1;
@@ -1167,14 +1170,12 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						break;
 					}
 					buffer_insert_text(ctx, current_frame->buffer, &nl, 1, current_frame->cursor);
-					current_frame->cursor += 1;
 					ctx->should_render = true;
 				}; break;
 				case SDL_SCANCODE_TAB: {
 					ctx->moving_col = false;
 					char nl = '\t';
 					buffer_insert_text(ctx, current_frame->buffer, &nl, 1, current_frame->cursor);
-					current_frame->cursor += 1;
 					ctx->should_render = true;
 				}; break;
 				case SDL_SCANCODE_UP: {
@@ -1249,6 +1250,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						}
 						ctx->focused_frame = frame;
 						current_frame = &ctx->frames[ctx->focused_frame];
+						current_frame->scroll_lock = true;
 						ctx->should_render = true;
 					}
 				}; break;
@@ -1359,7 +1361,6 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 			ctx->moving_col = false;
 			if (ctx->keymod & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) break;
 			buffer_insert_text(ctx, current_frame->buffer, event->text.text, SDL_strlen(event->text.text), current_frame->cursor);
-			current_frame->cursor += SDL_strlen(event->text.text);
 			ctx->should_render = true;
 		}; break;
 		case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
