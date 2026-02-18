@@ -106,11 +106,14 @@ typedef struct Ctx {
 static const SDL_Color text_color = {0xe6, 0xe6, 0xe6, SDL_ALPHA_OPAQUE};
 static const SDL_Color prefix_color = {0x86, 0xf6, 0x86, SDL_ALPHA_OPAQUE};
 static const SDL_Color selection_rect_color = {0xe6 / 3, 0xe6 / 2, 0xe6 / 3, SDL_ALPHA_OPAQUE};
+static const SDL_Color selection_color = {0xe6 / 3 / 2, 0xe6 / 2 / 2, 0xe6 / 3 / 2, SDL_ALPHA_OPAQUE / 2};
 static const SDL_Color line_number_color = {0xe6 / 2, 0xe6 / 2, 0xe6 / 2, SDL_ALPHA_OPAQUE};
 static const SDL_Color line_number_dimmed_color = {0xe6 / 4, 0xe6 / 4, 0xe6 / 4, SDL_ALPHA_OPAQUE};
 static const SDL_Color background_color = {0x04, 0x04, 0x04, SDL_ALPHA_OPAQUE};
 static const SDL_Color background_lines_color = {0x00, 0x30, 0x00, SDL_ALPHA_OPAQUE};
 static const SDL_Color debug_red __attribute__((unused)) = {0xff, 0x00, 0x00, SDL_ALPHA_OPAQUE};
+static const SDL_Color debug_yellow __attribute__((unused)) = {0xff, 0xff, 0x00, SDL_ALPHA_OPAQUE};
+static const SDL_Color debug_green __attribute__((unused)) = {0x00, 0xff, 0x00, SDL_ALPHA_OPAQUE};
 static const SDL_Color debug_blue __attribute__((unused)) = {0x00, 0x00, 0xff, SDL_ALPHA_OPAQUE};
 static const SDL_Color debug_black __attribute__((unused)) = {0x00, 0x00, 0x00, SDL_ALPHA_OPAQUE};
 
@@ -651,6 +654,8 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	Uint32 lines_count;
 	Uint32 line_start = SDL_max(0, SDL_floor(-ctx->frames[frame].scroll_interp.y / ctx->line_height));
 	lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, text, line_start);
+	Uint32 selection_min = SDL_min(draw_frame->cursor, draw_frame->selection);
+	Uint32 selection_max = SDL_max(draw_frame->cursor, draw_frame->selection);
 	for (Uint32 linenum = 0; linenum < lines_count; ++linenum) {
 		SDL_FRect line_bounds = {
 			.x = lines_bounds.x,
@@ -664,6 +669,46 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			Uint32 prefix_size = SDL_utf8strlen(draw_frame->line_prefix);
 			float prefix_width = prefix_size * ctx->font_width;
 			draw_text(ctx, line_bounds.x - prefix_width, line_bounds.y, prefix_color, prefix_size, draw_frame->line_prefix);
+		}
+		if (draw_frame->active_selection) {
+			set_color(ctx, selection_color);
+			if ((line.text + line.size >= draw_frame->buffer->text + selection_min && line.text <= draw_frame->buffer->text + selection_min) &&
+				(line.text + line.size >= draw_frame->buffer->text + selection_max && line.text <= draw_frame->buffer->text + selection_max)) {
+				SDL_FRect selection_oneline_rect = {
+					.x = line_bounds.x + string_to_visual(ctx, SDL_min(line.size, selection_min - (line.text - text)), line.text) * ctx->font_width,
+					.y = line_bounds.y,
+					.h = line_bounds.h,
+				};
+				selection_oneline_rect.w = SDL_min((string_to_visual(ctx, SDL_min(line.size, selection_max - (line.text - text)), line.text) * ctx->font_width) - selection_oneline_rect.x + line_bounds.x,
+					line_bounds.w - selection_oneline_rect.x + line_bounds.x);
+				if (selection_oneline_rect.x < line_bounds.x + line_bounds.w) {
+					SDL_RenderFillRect(ctx->renderer, &selection_oneline_rect);
+				}
+			} else if (line.text + line.size >= draw_frame->buffer->text + selection_min && line.text <= draw_frame->buffer->text + selection_min) {
+				SDL_FRect selection_min_rect = {
+					.x = line_bounds.x + string_to_visual(ctx, SDL_min(line.size, selection_min - (line.text - text)), line.text) * ctx->font_width,
+					.y = line_bounds.y,
+					.h = line_bounds.h,
+				};
+				selection_min_rect.w = line_bounds.w - selection_min_rect.x + line_bounds.x;
+				SDL_RenderFillRect(ctx->renderer, &selection_min_rect);
+			} else if (line.text >= draw_frame->buffer->text + selection_min && line.text + line.size <= draw_frame->buffer->text + selection_max) {
+				SDL_FRect selection_intermediate_rect = {
+					.x = line_bounds.x,
+					.y = line_bounds.y,
+					.w = line_bounds.w,
+					.h = line_bounds.h,
+				};
+				SDL_RenderFillRect(ctx->renderer, &selection_intermediate_rect);
+			} else if (line.text + line.size >= draw_frame->buffer->text + selection_max && line.text <= draw_frame->buffer->text + selection_max) {
+				SDL_FRect selection_max_rect = {
+					.x = line_bounds.x,
+					.y = line_bounds.y,
+					.w = SDL_min(string_to_visual(ctx, SDL_min(line.size, selection_max - (line.text - text)), line.text) * ctx->font_width, line_bounds.w),
+					.h = line_bounds.h,
+				};
+				SDL_RenderFillRect(ctx->renderer, &selection_max_rect);
+			}
 		}
 		render_line(ctx, line_bounds, line.size, line.text);
 		if (line.text - text <= draw_frame->cursor &&
@@ -724,8 +769,10 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 				.w = ctx->font_width,
 				.h = ctx->font_size,
 			};
-			set_color(ctx, selection_rect_color);
-			SDL_RenderRect(ctx->renderer, &selection_rect);
+			if (selection_rect.x < line_bounds.x + line_bounds.w) {
+				set_color(ctx, selection_rect_color);
+				SDL_RenderRect(ctx->renderer, &selection_rect);
+			}
 		}
 	}
 	if (frame_has_line_numbers(ctx, frame)) {
@@ -1384,9 +1431,11 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 			}
 			switch (event->key.key) {
 				case SDLK_SPACE: {
-					current_frame->selection = current_frame->cursor;
-					current_frame->active_selection = true;
-					ctx->should_render = true;
+					if (ctx->keymod & SDL_KMOD_CTRL) {
+						current_frame->selection = current_frame->cursor;
+						current_frame->active_selection = true;
+						ctx->should_render = true;
+					}
 				} break;
 				case SDLK_F: {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
@@ -1468,6 +1517,21 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						ctx->should_render = true;
 					}
 				}; break;
+				case SDLK_G: {
+					if (ctx->keymod & SDL_KMOD_CTRL) {
+						current_frame->active_selection = false;
+						ctx->should_render = true;
+					}
+				} break;
+				case SDLK_X: {
+					if (ctx->keymod & SDL_KMOD_CTRL) {
+						Uint32 temp = current_frame->selection;
+						current_frame->selection = current_frame->cursor;
+						current_frame->cursor = temp;
+						ctx->moving_col = false;
+						ctx->should_render = true;
+					}
+				} break;
 				case SDLK_O: {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
 						Uint32 ask_frame = create_ask_frame(ctx, Ask_Option_open, ctx->focused_frame, "Open: ");
