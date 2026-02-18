@@ -141,6 +141,16 @@ static inline SDL_Color hsv_to_rgb(SDL_Color hsv) {
 	return rgb;
 }
 
+static inline bool frame_has_line_numbers(Ctx *ctx, Uint32 frame) {
+	return (ctx->frames[frame].frame_type == Frame_Type_memory
+		|| ctx->frames[frame].frame_type == Frame_Type_file);
+}
+
+static inline bool frame_is_multiline(Ctx *ctx, Uint32 frame) {
+	return (ctx->frames[frame].frame_type == Frame_Type_memory
+		|| ctx->frames[frame].frame_type == Frame_Type_file);
+}
+
 static inline Uint32 reverse_sorted_index(Ctx *ctx, Uint32 sorted_ind) {
 	for (Uint32 i = 0; i < ctx->frames_count; ++i) {
 		if (ctx->sorted_frames[i] == sorted_ind) return i;
@@ -199,11 +209,13 @@ static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, siz
 		if (ctx->frames[i].buffer == buffer) {
 			if (ctx->frames[i].cursor == buffer->text_size - 1) ctx->frames[i].scroll_lock = false;
 			if (ctx->frames[i].cursor >= pos) ctx->frames[i].cursor += in_len;
-			if (!ctx->frames[i].scroll_lock) {
-				Sint32 text_lines = (Sint32)count_lines(ctx, buffer->text_size, buffer->text);
-				Sint32 buffer_last_line = (Sint32)SDL_ceil((ctx->frames[i].bounds.h - ctx->frames[i].scroll.y) / ctx->line_height);
-				if (text_lines >= buffer_last_line) {
-					ctx->frames[i].scroll.y = ctx->frames[i].bounds.h - (text_lines + 5.0) * ctx->line_height;
+			if (frame_is_multiline(ctx, i)) {
+				if (!ctx->frames[i].scroll_lock) {
+					Sint32 text_lines = (Sint32)count_lines(ctx, buffer->text_size, buffer->text);
+					Sint32 buffer_last_line = (Sint32)SDL_ceil((ctx->frames[i].bounds.h - ctx->frames[i].scroll.y) / ctx->line_height);
+					if (text_lines >= buffer_last_line) {
+						ctx->frames[i].scroll.y = ctx->frames[i].bounds.h - (text_lines + 5.0) * ctx->line_height;
+					}
 				}
 			}
 		}
@@ -270,16 +282,6 @@ static bool get_frame_render_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
 		.h = frame_bounds.h,
 	};
 	return true;
-}
-
-static inline bool frame_has_line_numbers(Ctx *ctx, Uint32 frame) {
-	return (ctx->frames[frame].frame_type == Frame_Type_memory
-		|| ctx->frames[frame].frame_type == Frame_Type_file);
-}
-
-static inline bool frame_is_multiline(Ctx *ctx, Uint32 frame) {
-	return (ctx->frames[frame].frame_type == Frame_Type_memory
-		|| ctx->frames[frame].frame_type == Frame_Type_file);
 }
 
 static inline bool get_frame_line_prefix_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
@@ -484,33 +486,33 @@ static void frame_previous_line(Ctx *ctx, Uint32 frame) {
 	current_frame->scroll_lock = true;
 	SDL_FRect bounds;
 	const char *cur = current_frame->buffer->text + current_frame->cursor;
-	row += SDL_StepBackUTF8(current_frame->buffer->text, &cur) != 0;
-	while (cur != current_frame->buffer->text && *cur != '\n') {
-		Uint32 cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
-		if (cp == 0 || cp == '\n') break;
+	Uint32 cp = -1;
+	while (true) {
+		cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
+		if (cp == '\n' || cp == 0) break;
 		if (cp == '\t') row += TAB_WIDTH;
-		else row++;
+		else row += 1;
 	}
+	if (cp == '\0') goto update_cursor;
+	do {
+		cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
+	} while (cp != '\n' && cp != '\0');
+	if (cp == '\n') cp = SDL_StepUTF8(&cur, 0);
 	if (ctx->moving_col) row = ctx->last_row;
 	else ctx->last_row = row;
 	ctx->moving_col = true;
 	ctx->should_render = true;
-	if (SDL_StepBackUTF8(current_frame->buffer->text, &cur) == 0) {
-		current_frame->cursor = 0;
-		goto up_fix_scroll;
-	}
-	while (true) {
-		Uint32 cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
-		if (cp == 0 || cp == '\n') break;
-	}
-	if (*cur == '\n') cur += 1;
-	while (row > 0 && *cur != '\n') {
-		Uint32 cp = SDL_StepUTF8(&cur, 0);
+	while (row > 0) {
+		cp = SDL_StepUTF8(&cur, 0);
+		if (cp == '\n') {
+			cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
+			break;
+		}
 		if (cp == '\t') row -= TAB_WIDTH;
 		else row -= 1;
-	}
+	};
+update_cursor:
 	current_frame->cursor = cur - current_frame->buffer->text;
-up_fix_scroll:
 	get_frame_render_text_rect(ctx, frame, &bounds);
 	Uint32 line_start = SDL_floor((-current_frame->scroll.y) / ctx->line_height);
 	String start_line = get_line(ctx, current_frame->buffer->text_size, current_frame->buffer->text, line_start);
@@ -523,33 +525,34 @@ static void frame_next_line(Ctx *ctx, Uint32 frame) {
 	Frame *current_frame = &ctx->frames[frame];
 	int row = 0;
 	current_frame->scroll_lock = true;
+	SDL_FRect bounds;
 	const char *cur = current_frame->buffer->text + current_frame->cursor;
-	while (cur != current_frame->buffer->text) {
-		Uint32 cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
-		if (cp == 0 || cp == '\n') break;
+	Uint32 cp = -1;
+	while (true) {
+		cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
+		if (cp == '\n' || cp == 0) break;
 		if (cp == '\t') row += TAB_WIDTH;
-		else row++;
+		else row += 1;
+	}
+	if (cp == '\n') cp = SDL_StepUTF8(&cur, 0);
+	while (true) {
+		cp = SDL_StepUTF8(&cur, 0);
+		if (cp == '\n' || cp == 0) break;
 	}
 	if (ctx->moving_col) row = ctx->last_row;
 	else ctx->last_row = row;
 	ctx->moving_col = true;
 	ctx->should_render = true;
-	SDL_StepUTF8(&cur, 0);
-	while (true) {
-		Uint32 cp = SDL_StepUTF8(&cur, 0);
-		if (cp == 0 || cp == '\n') break;
-	}
-	Uint32 cp;
-	while (true) {
-		if (row <= 0) break;
+	while (row > 0) {
 		cp = SDL_StepUTF8(&cur, 0);
+		if (cp == '\n') {
+			cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
+			break;
+		}
 		if (cp == '\t') row -= TAB_WIDTH;
-		else if (cp == '\n' || cp == 0) break;
 		else row -= 1;
-	}
-	if (cp == '\n') SDL_StepBackUTF8(current_frame->buffer->text, &cur);
+	};
 	current_frame->cursor = cur - current_frame->buffer->text;
-	SDL_FRect bounds;
 	get_frame_render_text_rect(ctx, frame, &bounds);
 	Sint32 line_end = SDL_floor((bounds.h - SDL_min(0, current_frame->scroll.y)) / ctx->line_height);
 	if (line_end < 0) line_end = 0;
