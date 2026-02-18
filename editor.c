@@ -293,8 +293,8 @@ static inline bool get_frame_render_text_rect(Ctx *ctx, Uint32 frame, SDL_FRect 
 	if (frame_has_line_numbers(ctx, frame)) {
 		bounds->x += ctx->font_width * 4;
 		bounds->w -= ctx->font_width * 4;
-		bounds->y += SDL_max(0, ctx->frames[frame].scroll.y);
-		bounds->h -= SDL_max(0, ctx->frames[frame].scroll.y);
+		bounds->y += SDL_max(0, ctx->frames[frame].scroll_interp.y);
+		bounds->h -= SDL_max(0, ctx->frames[frame].scroll_interp.y);
 		bounds->h = SDL_max(bounds->h, 0);
 	}
 	if (ctx->frames[frame].line_prefix != NULL) {
@@ -308,8 +308,8 @@ static inline bool get_frame_render_text_rect(Ctx *ctx, Uint32 frame, SDL_FRect 
 static inline bool get_frame_render_lines_numbers_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
 	get_frame_render_rect(ctx, frame, bounds);
 	bounds->w = ctx->font_width * 4;
-	bounds->y += SDL_max(0, ctx->frames[frame].scroll.y);
-	bounds->h -= SDL_max(0, ctx->frames[frame].scroll.y);
+	bounds->y += SDL_max(0, ctx->frames[frame].scroll_interp.y);
+	bounds->h -= SDL_max(0, ctx->frames[frame].scroll_interp.y);
 	bounds->h = SDL_max(bounds->h, 0);
 	return true;
 }
@@ -370,10 +370,6 @@ static void render_line(Ctx *ctx, SDL_FRect frame, const char *buffer, size_t le
 	}
 	tmp[out++] = '\0';
 	draw_text(ctx, frame.x, frame.y, text_color, out - 1, tmp);
-#ifdef DEBUG_LAYOUT
-	SDL_SetRenderDrawColor(ctx->renderer, 0xff, 0x00, 0x00, 0xff);
-	SDL_RenderRect(ctx->renderer, &frame);
-#endif
 	return;
 }
 
@@ -550,7 +546,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		bounds.h,
 	});
 	if (SDL_fabs(ctx->frames[frame].scroll_interp.y - ctx->frames[frame].scroll.y) >= 0.01) {
-		float speed = 1;
+		float speed = 10;
 		ctx->frames[frame].scroll_interp.y = lerp(ctx->frames[frame].scroll_interp.y, ctx->frames[frame].scroll.y, speed * ctx->deltatime);
 		ctx->should_render = true;
 	}
@@ -560,7 +556,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	for (Uint32 linenum = 0; linenum < lines_count; ++linenum) {
 		SDL_FRect line_bounds = {
 			.x = lines_bounds.x,
-			.y = lines_bounds.y + linenum * ctx->line_height,
+			.y = lines_bounds.y + linenum * ctx->line_height + SDL_fmod(SDL_min(0, draw_frame->scroll_interp.y), ctx->line_height),
 			.w = lines_bounds.w,
 			.h = ctx->line_height,
 		};
@@ -632,7 +628,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 #else
 			if (linenum == lines_count + line_start) current_color = line_number_dimmed_color;
 #endif
-			draw_text_fmt(ctx, lines_numbers_bounds.x, lines_numbers_bounds.y + (linenum - line_start) * ctx->line_height, current_color, "%u", linenum);
+			draw_text_fmt(ctx, lines_numbers_bounds.x, lines_numbers_bounds.y + (linenum - line_start) * ctx->line_height + SDL_fmod(SDL_min(0, draw_frame->scroll_interp.y), ctx->line_height), current_color, "%u", linenum);
 		}
 	}
 #ifdef DEBUG_SCROLL
@@ -670,6 +666,12 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		bounds.w,
 		bounds.h,
 	});
+#ifdef DEBUG_LAYOUT
+	set_color(ctx, debug_red);
+	SDL_RenderRect(ctx->renderer, &lines_bounds);
+	set_color(ctx, debug_blue);
+	SDL_RenderLine(ctx->renderer, lines_bounds.x, bounds.y + draw_frame->scroll_interp.y, lines_bounds.x + lines_bounds.w, bounds.y + draw_frame->scroll_interp.y);
+#endif
 }
 
 static TextBuffer *allocate_buffer(Ctx *ctx, char *name) {
@@ -1347,7 +1349,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 		} break;
 		case SDL_EVENT_MOUSE_WHEEL: {
 			if (frame_is_multiline(ctx, ctx->focused_frame)) {
-				current_frame->scroll.y += event->wheel.y * 32;
+				current_frame->scroll.y += event->wheel.y * ctx->line_height * 3;
 				current_frame->scroll_lock = true;
 				SDL_LogTrace(0, "Scroll %d to %f", ctx->focused_frame, current_frame->scroll.y);
 				ctx->should_render = true;
