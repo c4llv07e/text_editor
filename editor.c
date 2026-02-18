@@ -459,10 +459,62 @@ static Uint32 split_into_lines(Ctx *ctx, Uint32 strings_length, String strings[s
 	return SDL_max(0, line);
 }
 
+static void frame_beggining_line(Ctx *ctx, Uint32 frame) {
+	Uint32 cp;
+	Frame *current_frame = &ctx->frames[frame];
+	ctx->moving_col = false;
+	current_frame->scroll_lock = true;
+	const char *cur = current_frame->buffer->text + current_frame->cursor;
+	if (current_frame->buffer->text_size == 0) return;
+	do {
+		cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
+	} while (cp != 0 && cp != '\n');
+	if (cp == '\n') SDL_StepUTF8(&cur, 0);
+	current_frame->cursor = cur - current_frame->buffer->text;
+	ctx->should_render = true;
+}
+
+static void frame_beggining_spaced_line(Ctx *ctx, Uint32 frame) {
+	Uint32 cp;
+	Frame *current_frame = &ctx->frames[frame];
+	ctx->moving_col = false;
+	current_frame->scroll_lock = true;
+	const char *cur = current_frame->buffer->text + current_frame->cursor;
+	if (current_frame->buffer->text_size == 0) return;
+	do {
+		cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
+	} while (cp != 0 && cp != '\n');
+	if (cp == '\n') {
+		cp = SDL_StepUTF8(&cur, 0);
+	}
+	do {
+		cp = SDL_StepUTF8(&cur, 0);
+	} while (cp == ' ' || cp == '\t');
+	if (cp != 0) SDL_StepBackUTF8(current_frame->buffer->text, &cur);
+	current_frame->cursor = cur - current_frame->buffer->text;
+	ctx->should_render = true;
+}
+
+static void frame_end_line(Ctx *ctx, Uint32 frame) {
+	Uint32 cp;
+	Frame *current_frame = &ctx->frames[frame];
+	ctx->moving_col = false;
+	current_frame->scroll_lock = true;
+	const char *cur = current_frame->buffer->text + current_frame->cursor;
+	if (current_frame->buffer->text_size == 0) return;
+	do {
+		cp = SDL_StepUTF8(&cur, 0);
+	} while (cp != 0 && cp != '\n');
+	if (cp == '\n') cp = SDL_StepBackUTF8(current_frame->buffer->text, &cur);
+	current_frame->cursor = cur - current_frame->buffer->text;
+	ctx->should_render = true;
+}
+
 static void frame_previous_char(Ctx *ctx, Uint32 frame) {
 	Frame *current_frame = &ctx->frames[frame];
 	ctx->moving_col = false;
 	current_frame->scroll_lock = true;
+	if (current_frame->buffer->text_size == 0) return;
 	const char *text = &current_frame->buffer->text[current_frame->cursor];
 	SDL_StepBackUTF8(current_frame->buffer->text, &text);
 	current_frame->cursor = text - current_frame->buffer->text;
@@ -473,6 +525,7 @@ static void frame_next_char(Ctx *ctx, Uint32 frame) {
 	Frame *current_frame = &ctx->frames[frame];
 	ctx->moving_col = false;
 	current_frame->scroll_lock = true;
+	if (current_frame->buffer->text_size == 0) return;
 	const char *text = &current_frame->buffer->text[current_frame->cursor];
 	size_t len = current_frame->buffer->text_size - current_frame->cursor;
 	SDL_StepUTF8(&text, &len);
@@ -484,6 +537,7 @@ static void frame_previous_line(Ctx *ctx, Uint32 frame) {
 	Frame *current_frame = &ctx->frames[frame];
 	int row = 0;
 	current_frame->scroll_lock = true;
+	if (current_frame->buffer->text_size == 0) return;
 	SDL_FRect bounds;
 	const char *cur = current_frame->buffer->text + current_frame->cursor;
 	Uint32 cp = -1;
@@ -525,6 +579,7 @@ static void frame_next_line(Ctx *ctx, Uint32 frame) {
 	Frame *current_frame = &ctx->frames[frame];
 	int row = 0;
 	current_frame->scroll_lock = true;
+	if (current_frame->buffer->text_size == 0) return;
 	SDL_FRect bounds;
 	const char *cur = current_frame->buffer->text + current_frame->cursor;
 	Uint32 cp = -1;
@@ -607,7 +662,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 				.x = line_bounds.x + string_to_visual(ctx, SDL_min(line.size, draw_frame->cursor - (line.text - text)), line.text) * ctx->font_width,
 				.y = line_bounds.y,
 			};
-			float speed = 50;
+			float speed = 30;
 			Uint32 width = 2;
 			if (ctx->focused_frame == frame &&
 				(((SDL_fabs(actual_cursor_pos.x - ctx->active_cursor_pos.x) >= 0.01) ||
@@ -1323,6 +1378,21 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 				case SDLK_P: {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
 						frame_previous_line(ctx, ctx->focused_frame);
+					}
+				}; break;
+				case SDLK_A: {
+					if (ctx->keymod & SDL_KMOD_CTRL) {
+						frame_beggining_line(ctx, ctx->focused_frame);
+					}
+				}; break;
+				case SDLK_E: {
+					if (ctx->keymod & SDL_KMOD_CTRL) {
+						frame_end_line(ctx, ctx->focused_frame);
+					}
+				}; break;
+				case SDLK_M: {
+					if (ctx->keymod & SDL_KMOD_ALT) {
+						frame_beggining_spaced_line(ctx, ctx->focused_frame);
 					}
 				}; break;
 				case SDLK_N: {
