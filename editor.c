@@ -1511,7 +1511,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 							SDL_Log("Error, can't open new frame");
 							break;
 						}
-						ctx->focused_frame = frame;
+						set_focused_frame(ctx, frame);
 						current_frame = &ctx->frames[ctx->focused_frame];
 						ctx->should_render = true;
 					}
@@ -1570,7 +1570,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 							SDL_Log("Error, can't open new frame");
 							break;
 						}
-						ctx->focused_frame = frame;
+						set_focused_frame(ctx, frame);
 						current_frame = &ctx->frames[ctx->focused_frame];
 						current_frame->scroll_lock = true;
 						ctx->should_render = true;
