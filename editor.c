@@ -1340,6 +1340,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 		SDL_LogError(0, "Can't create buffer for logs");
 		return SDL_APP_FAILURE;
 	}
+	ctx->log_buffer->refcount += 1;
 	Uint32 log_frame = append_frame(ctx, ctx->log_buffer, (SDL_FRect){0x300 / 2, 0, 0x300 / 2, 0x200});
 	if (log_frame == (Uint32)-1) {
 		SDL_LogError(0, "Can't create log frame");
