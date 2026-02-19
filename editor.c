@@ -1589,6 +1589,12 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						current_frame->cursor = temp;
 						ctx->moving_col = false;
 						ctx->should_render = true;
+					} else if (ctx->keymod & SDL_KMOD_ALT) {
+						current_frame->buffer->refcount -= 1;
+						current_frame->taken = false;
+						ctx->focused_frame = find_any_frame(ctx);
+						current_frame = &ctx->frames[ctx->focused_frame];
+						ctx->should_render = true;
 					}
 				} break;
 				case SDLK_O: {
