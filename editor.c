@@ -120,6 +120,7 @@ static const SDL_Color selection_rect_color = {0xe6 / 3, 0xe6 / 2, 0xe6 / 3, SDL
 static const SDL_Color selection_color = {0xe6 / 3 / 2, 0xe6 / 2 / 2, 0xe6 / 3 / 2, SDL_ALPHA_OPAQUE / 2};
 static const SDL_Color line_number_color = {0xe6 / 2, 0xe6 / 2, 0xe6 / 2, SDL_ALPHA_OPAQUE};
 static const SDL_Color line_number_dimmed_color = {0xe6 / 4, 0xe6 / 4, 0xe6 / 4, SDL_ALPHA_OPAQUE};
+static const SDL_Color search_background_color = {0x63, 0x63, 0x24, SDL_ALPHA_OPAQUE};
 static const SDL_Color background_color = {0x04, 0x04, 0x04, SDL_ALPHA_OPAQUE};
 static const SDL_Color background_color_error = {0x63, 0x24, 0x24, SDL_ALPHA_OPAQUE};
 static const SDL_Color background_lines_color = {0x00, 0x30, 0x00, SDL_ALPHA_OPAQUE};
@@ -761,6 +762,18 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 					.h = line_bounds.h,
 				};
 				SDL_RenderFillRect(ctx->renderer, &selection_max_rect);
+			}
+		}
+		if (draw_frame->searching_mode && ctx->frames[draw_frame->search_frame].search_status == Search_Status_found) {
+			if (line.text - text <= draw_frame->search_cursor &&
+				((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->search_cursor))) {
+				set_color(ctx, search_background_color);
+				SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
+					.x = line_bounds.x + string_to_visual(ctx, SDL_min(line.size, draw_frame->search_cursor - (line.text - text)), line.text) * ctx->font_width,
+					.y = line_bounds.y,
+					.w = ctx->frames[draw_frame->search_frame].buffer->text_size * ctx->font_width,
+					.h = ctx->line_height,
+				});
 			}
 		}
 		render_line(ctx, line_bounds, line.size, line.text);
