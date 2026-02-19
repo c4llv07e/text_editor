@@ -764,16 +764,23 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 				SDL_RenderFillRect(ctx->renderer, &selection_max_rect);
 			}
 		}
-		if (draw_frame->searching_mode && ctx->frames[draw_frame->search_frame].search_status == Search_Status_found) {
-			if (line.text - text <= draw_frame->search_cursor &&
-				((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->search_cursor))) {
-				set_color(ctx, search_background_color);
-				SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
-					.x = line_bounds.x + string_to_visual(ctx, SDL_min(line.size, draw_frame->search_cursor - (line.text - text)), line.text) * ctx->font_width,
+		set_color(ctx, search_background_color);
+		if (draw_frame->searching_mode && ctx->frames[draw_frame->search_frame].buffer->text_size > 0) {
+			const char *search_cursor = line.text;
+			while (true) {
+				search_cursor = SDL_strnstr(search_cursor, ctx->frames[draw_frame->search_frame].buffer->text, line.text + line.size - search_cursor);
+				if (search_cursor == NULL) break;
+				SDL_FRect search_hi_rect = {
+					.x = line_bounds.x + string_to_visual(ctx, search_cursor - line.text, line.text) * ctx->font_width,
 					.y = line_bounds.y,
 					.w = ctx->frames[draw_frame->search_frame].buffer->text_size * ctx->font_width,
-					.h = ctx->line_height,
-				});
+					.h = line_bounds.h,
+				};
+				search_hi_rect.w = SDL_min(search_hi_rect.w, line_bounds.w - search_hi_rect.x + line_bounds.x);
+				if (search_hi_rect.x < line_bounds.x + line_bounds.w) {
+					SDL_RenderFillRect(ctx->renderer, &search_hi_rect);
+				}
+				search_cursor += ctx->frames[draw_frame->search_frame].buffer->text_size;
 			}
 		}
 		render_line(ctx, line_bounds, line.size, line.text);
