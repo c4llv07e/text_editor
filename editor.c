@@ -45,8 +45,8 @@ typedef enum {
 } Frame_Type;
 
 typedef enum {
-	Search_Status_found = 0,
-	Search_Status_not_found,
+	Search_Status_not_found = 0,
+	Search_Status_found,
 } Search_Status;
 
 typedef enum {
@@ -1553,26 +1553,34 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 				}; break;
 				case SDLK_Q: {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
-						current_frame->searching_mode = true;
-						current_frame->search_cursor = current_frame->cursor;
-						char *buffer_name;
-						SDL_asprintf(&buffer_name, "%d search", ctx->focused_frame);
-						TextBuffer *search_buffer = allocate_buffer(ctx, buffer_name);
-						#define SEARCH_MARGIN 0x20
-						SDL_FRect bounds = {
-							.x = current_frame->bounds.x + SEARCH_MARGIN,
-							.y = current_frame->bounds.y + SEARCH_MARGIN,
-							.w = current_frame->bounds.w - SEARCH_MARGIN * 2,
-							.h = ctx->font_size,
-						};
-						Uint32 search_frame = append_frame(ctx, search_buffer, bounds);
-						ctx->frames[search_frame].frame_type = Frame_Type_search;
-						ctx->frames[search_frame].parent_frame = ctx->focused_frame;
-						ctx->frames[search_frame].search_status = Search_Status_not_found;
-						current_frame->search_frame = search_frame;
-						set_focused_frame(ctx, search_frame);
-						current_frame = &ctx->frames[ctx->focused_frame];
-						ctx->should_render = true;
+						if (current_frame->frame_type == Frame_Type_search) {
+							if (current_frame->search_status == Search_Status_not_found) break;
+							ctx->frames[current_frame->parent_frame].cursor =
+								ctx->frames[current_frame->parent_frame].search_cursor
+								+ current_frame->buffer->text_size;
+							update_search(ctx, ctx->focused_frame);
+						} else {
+							current_frame->searching_mode = true;
+							current_frame->search_cursor = current_frame->cursor;
+							char *buffer_name;
+							SDL_asprintf(&buffer_name, "%d search", ctx->focused_frame);
+							TextBuffer *search_buffer = allocate_buffer(ctx, buffer_name);
+							#define SEARCH_MARGIN 0x20
+							SDL_FRect bounds = {
+								.x = current_frame->bounds.x + SEARCH_MARGIN,
+								.y = current_frame->bounds.y + SEARCH_MARGIN,
+								.w = current_frame->bounds.w - SEARCH_MARGIN * 2,
+								.h = ctx->font_size,
+							};
+							Uint32 search_frame = append_frame(ctx, search_buffer, bounds);
+							ctx->frames[search_frame].frame_type = Frame_Type_search;
+							ctx->frames[search_frame].parent_frame = ctx->focused_frame;
+							ctx->frames[search_frame].search_status = Search_Status_not_found;
+							current_frame->search_frame = search_frame;
+							set_focused_frame(ctx, search_frame);
+							current_frame = &ctx->frames[ctx->focused_frame];
+							ctx->should_render = true;
+						}
 					}
 				} break;
 				case SDLK_P: {
