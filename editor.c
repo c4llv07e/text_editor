@@ -57,6 +57,7 @@ typedef struct Frame {
 	Ask_Option ask_option;
 	char *filename;
 	char *line_prefix;
+	SDL_FRect bounds_interp;
 	SDL_FRect bounds;
 	SDL_FPoint scroll_interp;
 	SDL_FPoint scroll;
@@ -277,7 +278,7 @@ static inline Uint32 string_to_visual(Ctx *ctx, size_t text_length, const char t
 static bool get_frame_render_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
 	SDL_assert(bounds != NULL);
 	SDL_assert(ctx->frames_count >= frame);
-	SDL_FRect frame_bounds = ctx->frames[frame].bounds;
+	SDL_FRect frame_bounds = ctx->frames[frame].bounds_interp;
 	if (!ctx->frames[frame].is_global) {
 		frame_bounds.x += ctx->transform.x;
 		frame_bounds.y += ctx->transform.y;
@@ -1202,6 +1203,20 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 		SDL_StartTextInput(ctx->window);
 	}
 	ctx->keymod = SDL_GetModState();
+	for (Uint32 i = 0; i < ctx->frames_count; ++i) {
+		if (!ctx->frames[i].taken) continue;
+		if (SDL_fabs(ctx->frames[i].bounds_interp.x - ctx->frames[i].bounds.x) >= 0.01 ||
+			SDL_fabs(ctx->frames[i].bounds_interp.y - ctx->frames[i].bounds.y) >= 0.01 ||
+			SDL_fabs(ctx->frames[i].bounds_interp.w - ctx->frames[i].bounds.w) >= 0.01 ||
+			SDL_fabs(ctx->frames[i].bounds_interp.h - ctx->frames[i].bounds.h) >= 0.01) {
+			float speed = 30;
+			ctx->frames[i].bounds_interp.x = lerp(ctx->frames[i].bounds_interp.x, ctx->frames[i].bounds.x, SDL_min(1, speed * ctx->deltatime));
+			ctx->frames[i].bounds_interp.y = lerp(ctx->frames[i].bounds_interp.y, ctx->frames[i].bounds.y, SDL_min(1, speed * ctx->deltatime));
+			ctx->frames[i].bounds_interp.w = lerp(ctx->frames[i].bounds_interp.w, ctx->frames[i].bounds.w, SDL_min(1, speed * ctx->deltatime));
+			ctx->frames[i].bounds_interp.h = lerp(ctx->frames[i].bounds_interp.h, ctx->frames[i].bounds.h, SDL_min(1, speed * ctx->deltatime));
+			ctx->should_render = true;
+		}
+	}
 	if (ctx->should_render) {
 		render(ctx, false);
 	}
