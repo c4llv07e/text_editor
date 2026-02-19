@@ -41,7 +41,13 @@ typedef enum {
 	Frame_Type_memory = 0, // The most safe one
 	Frame_Type_file,
 	Frame_Type_ask,
+	Frame_Type_search,
 } Frame_Type;
+
+typedef enum {
+	Search_Status_found = 0,
+	Search_Status_not_found,
+} Search_Status;
 
 typedef enum {
 	Ask_Option_open = 0,
@@ -54,6 +60,10 @@ typedef struct Frame {
 	bool scroll_lock;
 	Frame_Type frame_type;
 	Uint32 parent_frame;
+	bool searching_mode;
+	Uint32 search_frame;
+	Uint32 search_cursor;
+	Search_Status search_status;
 	Ask_Option ask_option;
 	char *filename;
 	char *line_prefix;
@@ -111,6 +121,7 @@ static const SDL_Color selection_color = {0xe6 / 3 / 2, 0xe6 / 2 / 2, 0xe6 / 3 /
 static const SDL_Color line_number_color = {0xe6 / 2, 0xe6 / 2, 0xe6 / 2, SDL_ALPHA_OPAQUE};
 static const SDL_Color line_number_dimmed_color = {0xe6 / 4, 0xe6 / 4, 0xe6 / 4, SDL_ALPHA_OPAQUE};
 static const SDL_Color background_color = {0x04, 0x04, 0x04, SDL_ALPHA_OPAQUE};
+static const SDL_Color background_color_error = {0x63, 0x24, 0x24, SDL_ALPHA_OPAQUE};
 static const SDL_Color background_lines_color = {0x00, 0x30, 0x00, SDL_ALPHA_OPAQUE};
 static const SDL_Color debug_red __attribute__((unused)) = {0xff, 0x00, 0x00, SDL_ALPHA_OPAQUE};
 static const SDL_Color debug_yellow __attribute__((unused)) = {0xff, 0xff, 0x00, SDL_ALPHA_OPAQUE};
@@ -273,6 +284,39 @@ static inline Uint32 string_to_visual(Ctx *ctx, size_t text_length, const char t
 		}
 	}
 	return visual_char;
+}
+
+static inline void frame_scroll_to_line(Ctx *ctx, Uint32 frame, Sint32 line) {
+	ctx->frames[frame].scroll.y = -line * ctx->line_height;
+}
+
+static inline void frame_scroll_to_line_centered(Ctx *ctx, Uint32 frame, Sint32 line) {
+	line -= ctx->frames[frame].bounds.h / ctx->line_height / 2;
+	ctx->frames[frame].scroll.y = -line * ctx->line_height;
+}
+
+static void update_search(Ctx *ctx, Uint32 search_frame) {
+	SDL_assert(ctx->frames[search_frame].taken);
+	Uint32 parent_frame = ctx->frames[search_frame].parent_frame;
+	SDL_assert(ctx->frames[parent_frame].taken);
+	if (ctx->frames[search_frame].buffer->text_size == 0) {
+		ctx->frames[search_frame].search_status = Search_Status_not_found;
+		ctx->should_render = true;
+		return;
+	}
+	char *first_found_ptr = SDL_strnstr(ctx->frames[parent_frame].buffer->text + ctx->frames[parent_frame].cursor,
+		ctx->frames[search_frame].buffer->text,
+		ctx->frames[parent_frame].buffer->text_size - ctx->frames[parent_frame].cursor);
+	if (first_found_ptr == NULL) {
+		ctx->frames[search_frame].search_status = Search_Status_not_found;
+		ctx->should_render = true;
+		return;
+	}
+	ctx->frames[search_frame].search_status = Search_Status_found;
+	ctx->frames[parent_frame].search_cursor = first_found_ptr - ctx->frames[parent_frame].buffer->text;
+	Uint32 line = count_lines(ctx, ctx->frames[parent_frame].search_cursor, ctx->frames[parent_frame].buffer->text);
+	frame_scroll_to_line_centered(ctx, parent_frame, line);
+	ctx->should_render = true;
 }
 
 static bool get_frame_render_rect(Ctx *ctx, Uint32 frame, SDL_FRect *bounds) {
@@ -640,7 +684,15 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	get_frame_render_text_rect(ctx, frame, &lines_bounds);
 	get_frame_render_lines_numbers_rect(ctx, frame, &lines_numbers_bounds);
 	SDL_assert(SDL_arraysize(lines) >= (lines_bounds.h / ctx->line_height));
-	SDL_SetRenderDrawColor(ctx->renderer, 0x12, 0x12, 0x12, SDL_ALPHA_OPAQUE);
+	if (draw_frame->frame_type == Frame_Type_search) {
+		if (draw_frame->search_status == Search_Status_not_found) {
+			set_color(ctx, background_color_error);
+		} else {
+			SDL_SetRenderDrawColor(ctx->renderer, 0x12, 0x12, 0x12, SDL_ALPHA_OPAQUE);
+		}
+	} else {
+		SDL_SetRenderDrawColor(ctx->renderer, 0x12, 0x12, 0x12, SDL_ALPHA_OPAQUE);
+	}
 	SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
 		bounds.x,
 		bounds.y,
@@ -664,7 +716,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			.w = lines_bounds.w,
 			.h = ctx->line_height,
 		};
-		if (line_bounds.y + line_bounds.h > lines_bounds.y + lines_bounds.h) break;
+		if (line_bounds.y + line_bounds.h > lines_bounds.y + lines_bounds.h + 4) break;
 		String line = lines[linenum];
 		if (draw_frame->line_prefix != NULL) {
 			Uint32 prefix_size = SDL_utf8strlen(draw_frame->line_prefix);
@@ -1365,6 +1417,10 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						current_frame->buffer->text_size -= diff;
 						ctx->should_render = true;
 					}
+					if (current_frame->frame_type == Frame_Type_search) {
+						update_search(ctx, ctx->focused_frame);
+						ctx->should_render = true;
+					}
 				}; break;
 				case SDL_SCANCODE_ESCAPE: {
 					if (current_frame->frame_type == Frame_Type_ask) {
@@ -1374,9 +1430,16 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						current_frame = &ctx->frames[ctx->focused_frame];
 						ctx->should_render = true;
 						break;
+					} else if (current_frame->frame_type == Frame_Type_search) {
+						current_frame->taken = false;
+						current_frame->buffer->refcount -= 1;
+						ctx->focused_frame = current_frame->parent_frame;
+						current_frame = &ctx->frames[ctx->focused_frame];
+						ctx->should_render = true;
+						break;
 					}
 				}; break;
-				case SDL_SCANCODE_RETURN: {
+				case SDL_SCANCODE_RETURN: { /* ENTER (for fast searching) */
 					ctx->moving_col = false;
 					char nl = '\n';
 					if (current_frame->frame_type == Frame_Type_ask) {
@@ -1424,9 +1487,22 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 							SDL_LogError(0, ("Unknown ask option: %" SDL_PRIu32), (Uint32)current_frame->ask_option);
 						}
 						break;
+					} else if (current_frame->frame_type == Frame_Type_search) {
+						current_frame->buffer->refcount -= 1;
+						current_frame->taken = false;
+						ctx->frames[current_frame->parent_frame].searching_mode = false;
+						if (current_frame->search_status == Search_Status_found) {
+							ctx->frames[current_frame->parent_frame].cursor = ctx->frames[current_frame->parent_frame].search_cursor;
+						}
+						ctx->focused_frame = current_frame->parent_frame;
+						current_frame = &ctx->frames[ctx->focused_frame];
+						ctx->should_render = true;
+						break;
 					}
-					buffer_insert_text(ctx, current_frame->buffer, &nl, 1, current_frame->cursor);
-					ctx->should_render = true;
+					if (frame_is_multiline(ctx, ctx->focused_frame)) {
+						buffer_insert_text(ctx, current_frame->buffer, &nl, 1, current_frame->cursor);
+						ctx->should_render = true;
+					}
 				}; break;
 				case SDL_SCANCODE_TAB: {
 					ctx->moving_col = false;
@@ -1474,6 +1550,30 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						}
 					}
 				}; break;
+				case SDLK_Q: {
+					if (ctx->keymod & SDL_KMOD_CTRL) {
+						current_frame->searching_mode = true;
+						current_frame->search_cursor = current_frame->cursor;
+						char *buffer_name;
+						SDL_asprintf(&buffer_name, "%d search", ctx->focused_frame);
+						TextBuffer *search_buffer = allocate_buffer(ctx, buffer_name);
+						#define SEARCH_MARGIN 0x20
+						SDL_FRect bounds = {
+							.x = current_frame->bounds.x + SEARCH_MARGIN,
+							.y = current_frame->bounds.y + SEARCH_MARGIN,
+							.w = current_frame->bounds.w - SEARCH_MARGIN * 2,
+							.h = ctx->font_size,
+						};
+						Uint32 search_frame = append_frame(ctx, search_buffer, bounds);
+						ctx->frames[search_frame].frame_type = Frame_Type_search;
+						ctx->frames[search_frame].parent_frame = ctx->focused_frame;
+						ctx->frames[search_frame].search_status = Search_Status_not_found;
+						current_frame->search_frame = search_frame;
+						set_focused_frame(ctx, search_frame);
+						current_frame = &ctx->frames[ctx->focused_frame];
+						ctx->should_render = true;
+					}
+				} break;
 				case SDLK_P: {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
 						frame_previous_line(ctx, ctx->focused_frame);
@@ -1578,8 +1678,21 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 				}; break;
 				case SDLK_G: {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
-						current_frame->active_selection = false;
-						ctx->should_render = true;
+						if (current_frame->active_selection) {
+							current_frame->active_selection = false;
+							ctx->should_render = true;
+							break;
+						} else {
+							if (current_frame->frame_type == Frame_Type_search) {
+								current_frame->taken = false;
+								current_frame->buffer->refcount -= 1;
+								ctx->frames[current_frame->parent_frame].searching_mode = false;
+								ctx->focused_frame = current_frame->parent_frame;
+								current_frame = &ctx->frames[ctx->focused_frame];
+								ctx->should_render = true;
+								break;
+							}
+						}
 					}
 				} break;
 				case SDLK_X: {
@@ -1705,6 +1818,9 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 			current_frame->active_selection = false;
 			ctx->moving_col = false;
 			buffer_insert_text(ctx, current_frame->buffer, event->text.text, SDL_strlen(event->text.text), current_frame->cursor);
+			if (current_frame->frame_type == Frame_Type_search) {
+				update_search(ctx, ctx->focused_frame);
+			}
 			ctx->should_render = true;
 		}; break;
 		case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
