@@ -1454,6 +1454,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 					} else if (current_frame->frame_type == Frame_Type_search) {
 						current_frame->taken = false;
 						current_frame->buffer->refcount -= 1;
+						ctx->frames[current_frame->parent_frame].searching_mode = false;
 						ctx->focused_frame = current_frame->parent_frame;
 						current_frame = &ctx->frames[ctx->focused_frame];
 						ctx->should_render = true;
