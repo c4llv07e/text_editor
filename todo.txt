@@ -5,8 +5,6 @@
 	- word wrapping
 - Use ring buffer selection like in emacs
 - Running commands
-- Searching
-- Undo/redo
 
 After complete layouting
 - Store layout in project file

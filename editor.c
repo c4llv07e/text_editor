@@ -20,6 +20,7 @@
 
 #define TEXT_CHUNK_SIZE 256
 #define TAB_WIDTH 8
+#define UNDO_RING_SIZE 100
 
 #define lerp(from, to, value) ((from) + ((to) - (from)) * (value))
 
@@ -28,12 +29,28 @@ typedef struct {
 	char *text;
 } String;
 
+typedef enum {
+	Undo_Type_none = 0, // We probably should panic here
+	Undo_Type_insert,
+	Undo_Type_delete,
+} Undo_Type;
+
+typedef struct Undo_Operation {
+	Undo_Type type;
+	Uint32 pos;
+	Uint32 len;
+	char *data;
+} Undo_Operation;
+
 typedef struct {
 	char *name;
 	// If <= 0, considered untaken
 	Sint32 refcount; // Must be changed by end receive function, not by allocate_buffer
 	size_t text_size;
 	size_t text_capacity;
+	size_t undos_size;
+	size_t undos_cursor; // Stores position to check if redo is possible
+	Undo_Operation undos[UNDO_RING_SIZE];
 	char *text;
 } TextBuffer;
 
@@ -124,6 +141,7 @@ static const SDL_Color search_background_color = {0x63, 0x63, 0x24, SDL_ALPHA_OP
 static const SDL_Color background_color = {0x04, 0x04, 0x04, SDL_ALPHA_OPAQUE};
 static const SDL_Color background_color_error = {0x63, 0x24, 0x24, SDL_ALPHA_OPAQUE};
 static const SDL_Color background_lines_color = {0x00, 0x30, 0x00, SDL_ALPHA_OPAQUE};
+
 static const SDL_Color debug_red __attribute__((unused)) = {0xff, 0x00, 0x00, SDL_ALPHA_OPAQUE};
 static const SDL_Color debug_yellow __attribute__((unused)) = {0xff, 0xff, 0x00, SDL_ALPHA_OPAQUE};
 static const SDL_Color debug_green __attribute__((unused)) = {0x00, 0xff, 0x00, SDL_ALPHA_OPAQUE};
@@ -178,6 +196,25 @@ static inline Uint32 reverse_sorted_index(Ctx *ctx, Uint32 sorted_ind) {
 	return -1;
 }
 
+// I will kill myself if one of the ops data won't be allocated with SDL_malloc
+static void push_undo_op(Ctx *ctx, Uint32 buffer, Undo_Operation op) {
+	SDL_assert(ctx->buffers[buffer].refcount > 0);
+	TextBuffer *buf = &ctx->buffers[buffer];
+	if (buf->undos_cursor >= UNDO_RING_SIZE) {
+		SDL_free(buf->undos[0].data);
+		SDL_memmove(buf->undos, buf->undos + 1, (UNDO_RING_SIZE - 1) * sizeof *buf->undos);
+		buf->undos_cursor -= 1;
+	}
+	// [][]
+	// SIZE = 2
+	// | 0
+	//   | 1
+	//     | 2
+	buf->undos_size = buf->undos_cursor + 1;
+	buf->undos[buf->undos_cursor] = op;
+	buf->undos_cursor += 1;
+}
+
 static inline bool is_space_only(Ctx *ctx, size_t text_length, const char text[text_length]) {
 	(void) ctx;
 	if (text_length == 0) return true;
@@ -192,6 +229,36 @@ static inline void set_color(Ctx *ctx, SDL_Color color) {
 	SDL_SetRenderDrawColor(ctx->renderer, color.r, color.g, color.b, color.a);
 }
 
+static void buffer_delete_text_no_undo(Ctx *ctx, Uint32 bufid, Uint32 from, Uint32 to) {
+	TextBuffer *buffer = &ctx->buffers[bufid];
+	SDL_assert(buffer->refcount > 0);
+	SDL_assert(to >= from);
+	SDL_memmove(buffer->text + from, buffer->text + to,
+		buffer->text_size - to + 1);
+	for (Uint32 i = 0; i < ctx->frames_count; ++i) {
+		if (!ctx->frames[i].taken) continue;
+		if (ctx->frames[i].buffer != buffer) continue;
+		if (ctx->frames[i].cursor >= to) ctx->frames[i].cursor -= to - from;
+		if (ctx->frames[i].selection >= to) ctx->frames[i].selection -= to - from;
+	}
+	buffer->text_size -= to - from;
+	ctx->should_render = true;
+}
+
+static void buffer_delete_text(Ctx *ctx, Uint32 bufid, Uint32 from, Uint32 to) {
+	TextBuffer *buffer = &ctx->buffers[bufid];
+	SDL_assert(buffer->refcount > 0);
+	SDL_assert(to >= from);
+	char *data = SDL_strndup(buffer->text + from, to - from);
+	buffer_delete_text_no_undo(ctx, bufid, from, to);
+	push_undo_op(ctx, bufid, (Undo_Operation) {
+		.type = Undo_Type_delete,
+		.pos = from,
+		.len = to - from,
+		.data = data,
+	});
+}
+
 static inline Uint32 count_lines(Ctx *ctx, size_t text_size, char text[text_size]) {
 	Uint32 lines = 1;
 	(void) ctx;
@@ -203,7 +270,7 @@ static inline Uint32 count_lines(Ctx *ctx, size_t text_size, char text[text_size
 	return lines;
 }
 
-static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, size_t in_len, Uint32 pos) {
+static void buffer_insert_text_no_undo(Ctx *ctx, TextBuffer *buffer, const char *in, size_t in_len, Uint32 pos) {
 	if (in_len == 0) return;
 	if (pos > buffer->text_size) pos = buffer->text_size;
 	size_t new_size = (size_t)buffer->text_size + in_len;
@@ -241,6 +308,16 @@ static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, siz
 		}
 	}
 	ctx->should_render = true;
+}
+
+static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, size_t in_len, Uint32 pos) {
+	buffer_insert_text_no_undo(ctx, buffer, in, in_len, pos);
+	push_undo_op(ctx, (buffer - &ctx->buffers[0]) / sizeof *buffer, (Undo_Operation) {
+		.type = Undo_Type_insert,
+		.pos = pos,
+		.len = in_len,
+		.data = SDL_strdup(in),
+	});
 }
 
 static inline void debug_rect(Ctx *ctx, SDL_FRect *rect, SDL_Color color) {
@@ -860,6 +937,13 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			draw_text_fmt(ctx, lines_numbers_bounds.x, lines_numbers_bounds.y + (linenum - line_start) * ctx->line_height + SDL_fmod(SDL_min(0, draw_frame->scroll_interp.y), ctx->line_height), current_color, "%u", linenum);
 		}
 	}
+#ifdef DEBUG_UNDO
+	for (Uint32 i = 0; i < draw_frame->buffer->undos_size; ++i) {
+		Undo_Operation op = draw_frame->buffer->undos[i];
+		SDL_FPoint start = {50, 200};
+		draw_text_fmt(ctx, start.x, start.y + i * ctx->line_height, debug_green, "%u (%d %u - %u) %.*s", i, (int)op.type, op.pos, op.len, (int)op.len, op.data);
+	}
+#endif
 #ifdef DEBUG_SCROLL
 	if (draw_frame->scroll_lock)
 		SDL_SetRenderDrawColor(ctx->renderer, 0xcc, 0x20, 0x20, SDL_ALPHA_OPAQUE);
@@ -1425,18 +1509,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						const char *previous = current;
 						SDL_StepBackUTF8(current_frame->buffer->text, &previous);
 						size_t diff = current - previous;
-						SDL_memmove((char *)previous, current,
-							current_frame->buffer->text_size - current_frame->cursor + diff);
-						for (Uint32 i = 0; i < ctx->frames_count; ++i) {
-							if (!ctx->frames[i].taken) continue;
-							if (ctx->frames[i].buffer != current_frame->buffer) continue;
-							if ((ctx->frames[i].buffer->text + ctx->frames[i].cursor) >= current)
-								ctx->frames[i].cursor -= diff;
-							if ((ctx->frames[i].buffer->text + ctx->frames[i].selection) >= current)
-								ctx->frames[i].selection -= diff;
-						}
-						current_frame->buffer->text_size -= diff;
-						ctx->should_render = true;
+						buffer_delete_text(ctx, (current_frame->buffer - ctx->buffers) / sizeof current_frame->buffer, current_frame->cursor - diff, current_frame->cursor);
 					}
 					if (current_frame->frame_type == Frame_Type_search) {
 						update_search(ctx, ctx->focused_frame);
@@ -1604,6 +1677,20 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						}
 					}
 				} break;
+				case SDLK_SLASH: {
+					if (current_frame->buffer->undos_cursor <= 0) break;
+					Undo_Operation op = current_frame->buffer->undos[current_frame->buffer->undos_cursor - 1];
+					if (op.type == Undo_Type_insert) {
+						buffer_delete_text_no_undo(ctx, (current_frame->buffer - ctx->buffers) / sizeof *current_frame->buffer, op.pos, op.pos + op.len);
+						current_frame->buffer->undos_cursor -= 1;
+					} else if (op.type == Undo_Type_delete) {
+						buffer_insert_text_no_undo(ctx, current_frame->buffer, op.data, op.len, op.pos);
+						current_frame->buffer->undos_cursor -= 1;
+					} else {
+						SDL_assert(!"Unknown Undo type operation");
+					}
+					ctx->should_render = true;
+				} break;
 				case SDLK_P: {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
 						frame_previous_line(ctx, ctx->focused_frame);
@@ -1656,21 +1743,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						current_frame->buffer->text[selection_max] = '\0';
 						SDL_SetClipboardText(current_frame->buffer->text + selection_min);
 						current_frame->buffer->text[selection_max] = ch;
-						const char *current = current_frame->buffer->text + selection_max;
-						const char *previous = current_frame->buffer->text + selection_min;
-						size_t diff = current - previous;
-						SDL_memmove((char *)previous, current,
-							current_frame->buffer->text_size - current_frame->cursor + diff);
-						for (Uint32 i = 0; i < ctx->frames_count; ++i) {
-							if (!ctx->frames[i].taken) continue;
-							if (ctx->frames[i].buffer != current_frame->buffer) continue;
-							if ((ctx->frames[i].buffer->text + ctx->frames[i].cursor) >= current)
-								ctx->frames[i].cursor -= diff;
-							if ((ctx->frames[i].buffer->text + ctx->frames[i].selection) >= current)
-								ctx->frames[i].selection -= diff;
-						}
-						current_frame->buffer->text_size -= diff;
-						ctx->should_render = true;
+						buffer_delete_text(ctx, (current_frame->buffer - ctx->buffers) / sizeof *current_frame->buffer, selection_min, selection_max);
 					} else if (ctx->keymod & SDL_KMOD_ALT) {
 						current_frame->active_selection = false;
 						ctx->moving_col = false;
