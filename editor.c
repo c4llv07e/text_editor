@@ -603,8 +603,6 @@ static String get_line(Ctx *ctx, size_t text_size, char text[text_size], Uint32 
 
 static Uint32 split_into_lines(Ctx *ctx, Uint32 strings_length, String strings[strings_length], char *text, Uint32 line_offset) {
 	(void)ctx;
-	char *end = text;
-	char *last = text - 1;
 	Sint32 line = -line_offset;
 	if (text == NULL) {
 		if (line >= 0) {
@@ -616,6 +614,8 @@ static Uint32 split_into_lines(Ctx *ctx, Uint32 strings_length, String strings[s
 		}
 		return 0;
 	}
+	char *end = text;
+	char *last = text - 1;
 	while (*end != '\0') {
 		if ((Sint32)strings_length <= line) break;
 		while (*end != '\0' && *end != '\n') end++;
@@ -1705,6 +1705,10 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 							char *buffer_name;
 							SDL_asprintf(&buffer_name, "%d search", ctx->focused_frame);
 							TextBuffer *search_buffer = allocate_buffer(ctx, buffer_name);
+							if (search_buffer == NULL) {
+								SDL_LogError(0, "Can't create buffer for ask frame\n");
+								break;
+							}
 							#define SEARCH_MARGIN 0x20
 							SDL_FRect bounds = {
 								.x = current_frame->bounds.x + SEARCH_MARGIN,
@@ -2028,15 +2032,15 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
 	(void) result;
 #ifdef DEBUG_QUIT
 	TTF_CloseFont(ctx->font);
-	for (Uint32 i = 0; i < ctx->buffers_count; ++i) {
-		buffer_deallocate(ctx, i);
-	}
-	SDL_free(ctx->buffers);
 	for (Uint32 i = 0; i < ctx->frames_count; ++i) {
 		frame_deallocate(ctx, &ctx->frames[i]);
 	}
 	SDL_free(ctx->frames);
 	SDL_free(ctx->sorted_frames);
+	for (Uint32 i = 0; i < ctx->buffers_count; ++i) {
+		buffer_deallocate(ctx, i);
+	}
+	SDL_free(ctx->buffers);
 	SDL_DestroyTexture(ctx->space_texture);
 	SDL_DestroyTexture(ctx->tab_texture);
 	SDL_DestroyTexture(ctx->overflow_cursor_texture);
