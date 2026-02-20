@@ -1482,7 +1482,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 		return SDL_APP_FAILURE;
 	}
 	if (argc > 1) {
-		ctx->frames[main_frame].filename = argv[1];
+		ctx->frames[main_frame].filename = SDL_strdup(argv[1]);
 		ctx->frames[main_frame].scroll_lock = true;
 	}
 	ctx->log_buffer = allocate_buffer(ctx, "logs");
@@ -2003,8 +2003,43 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 	return SDL_APP_CONTINUE;
 }
 
+static void buffer_deallocate(Ctx *ctx, Uint32 bufid) {
+	TextBuffer *buffer = &ctx->buffers[bufid];
+	buffer->undos_cursor = 0;
+	undo_clear_after_cursor(ctx, bufid);
+	if (buffer->text != NULL)
+		SDL_free(buffer->text);
+	buffer->refcount = 0;
+}
+
+static void frame_deallocate(Ctx *ctx, Frame *frame) {
+	(void)ctx;
+	if (frame->filename != NULL)
+		SDL_free(frame->filename);
+	frame->buffer->refcount -= 1;
+	frame->taken = false;
+}
+
 void SDL_AppQuit(void *appstate, SDL_AppResult result) {
-	(void) appstate;
+	Ctx *ctx = (Ctx *)appstate;
+	(void) ctx;
 	(void) result;
+#ifdef DEBUG_QUIT
+	TTF_CloseFont(ctx->font);
+	for (Uint32 i = 0; i < ctx->buffers_count; ++i) {
+		buffer_deallocate(ctx, i);
+	}
+	SDL_free(ctx->buffers);
+	for (Uint32 i = 0; i < ctx->frames_count; ++i) {
+		frame_deallocate(ctx, &ctx->frames[i]);
+	}
+	SDL_free(ctx->frames);
+	SDL_free(ctx->sorted_frames);
+	SDL_DestroyTexture(ctx->space_texture);
+	SDL_DestroyTexture(ctx->tab_texture);
+	SDL_DestroyTexture(ctx->overflow_cursor_texture);
+	SDL_DestroyRenderer(ctx->renderer);
+	SDL_DestroyWindow(ctx->window);
+#endif
 	// TODO(c4llv07e): Deallocate all buffers in debug for valgrind.
 }
