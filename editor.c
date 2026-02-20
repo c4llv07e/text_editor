@@ -35,8 +35,15 @@ typedef enum {
 	Undo_Type_delete,
 } Undo_Type;
 
+typedef enum {
+	Undo_Group_none = 0,
+	Undo_Group_keyboard,
+	Undo_Group_clipboard,
+} Undo_Group;
+
 typedef struct Undo_Operation {
 	Undo_Type type;
+	Undo_Group group;
 	Uint32 pos;
 	Uint32 len;
 	char *data;
@@ -44,7 +51,7 @@ typedef struct Undo_Operation {
 
 typedef struct {
 	char *name;
-	// If <= 0, considered untaken
+	// If < 0, considered untaken
 	Sint32 refcount; // Must be changed by end receive function, not by allocate_buffer
 	size_t text_size;
 	size_t text_capacity;
@@ -196,10 +203,47 @@ static inline Uint32 reverse_sorted_index(Ctx *ctx, Uint32 sorted_ind) {
 	return -1;
 }
 
+static void undo_clear_after_cursor(Ctx *ctx, Uint32 buffer) {
+	SDL_assert(ctx->buffers[buffer].refcount > 0);
+	TextBuffer *buf = &ctx->buffers[buffer];
+	for (Uint32 i = buf->undos_cursor; i < buf->undos_size; ++i) {
+		SDL_free(buf->undos[i].data);
+	}
+	buf->undos_size = buf->undos_cursor;
+}
+
 // I will kill myself if one of the ops data won't be allocated with SDL_malloc
 static void push_undo_op(Ctx *ctx, Uint32 buffer, Undo_Operation op) {
 	SDL_assert(ctx->buffers[buffer].refcount > 0);
 	TextBuffer *buf = &ctx->buffers[buffer];
+	if (buf->undos_cursor > 0) {
+		Undo_Operation *prev_op = &buf->undos[buf->undos_cursor - 1];
+		if (op.type == Undo_Type_insert) {
+			if (op.type == prev_op->type && op.pos == (prev_op->pos + prev_op->len)) {
+				if ((op.data[0] == '\n') == (prev_op->data[prev_op->len - 1] == '\n')) {
+					undo_clear_after_cursor(ctx, buffer);
+					prev_op->data = SDL_realloc(prev_op->data, prev_op->len + op.len);
+					SDL_assert(prev_op->data != NULL);
+					SDL_memcpy(prev_op->data + prev_op->len, op.data, op.len);
+					SDL_free(op.data);
+					prev_op->len += op.len;
+					return;
+				}
+			}
+		} else if (op.type == Undo_Type_delete) {
+			if (op.type == prev_op->type && (op.pos + op.len) == prev_op->pos) {
+				undo_clear_after_cursor(ctx, buffer);
+				op.data = SDL_realloc(op.data, op.len + prev_op->len);
+				SDL_assert(op.data != NULL);
+				SDL_memcpy(op.data + op.len, prev_op->data, prev_op->len);
+				SDL_free(prev_op->data);
+				prev_op->data = op.data;
+				prev_op->pos = op.pos;
+				prev_op->len += op.len;
+				return;
+			}
+		}
+	}
 	if (buf->undos_cursor >= UNDO_RING_SIZE) {
 		SDL_free(buf->undos[0].data);
 		SDL_memmove(buf->undos, buf->undos + 1, (UNDO_RING_SIZE - 1) * sizeof *buf->undos);
@@ -210,9 +254,9 @@ static void push_undo_op(Ctx *ctx, Uint32 buffer, Undo_Operation op) {
 	// | 0
 	//   | 1
 	//     | 2
-	buf->undos_size = buf->undos_cursor + 1;
 	buf->undos[buf->undos_cursor] = op;
 	buf->undos_cursor += 1;
+	undo_clear_after_cursor(ctx, buffer);
 }
 
 static inline bool is_space_only(Ctx *ctx, size_t text_length, const char text[text_length]) {
@@ -245,7 +289,7 @@ static void buffer_delete_text_no_undo(Ctx *ctx, Uint32 bufid, Uint32 from, Uint
 	ctx->should_render = true;
 }
 
-static void buffer_delete_text(Ctx *ctx, Uint32 bufid, Uint32 from, Uint32 to) {
+static void buffer_delete_text(Ctx *ctx, Uint32 bufid, Uint32 from, Uint32 to, Undo_Group undo_group) {
 	TextBuffer *buffer = &ctx->buffers[bufid];
 	SDL_assert(buffer->refcount > 0);
 	SDL_assert(to >= from);
@@ -253,6 +297,7 @@ static void buffer_delete_text(Ctx *ctx, Uint32 bufid, Uint32 from, Uint32 to) {
 	buffer_delete_text_no_undo(ctx, bufid, from, to);
 	push_undo_op(ctx, bufid, (Undo_Operation) {
 		.type = Undo_Type_delete,
+		.group = undo_group,
 		.pos = from,
 		.len = to - from,
 		.data = data,
@@ -310,13 +355,14 @@ static void buffer_insert_text_no_undo(Ctx *ctx, TextBuffer *buffer, const char 
 	ctx->should_render = true;
 }
 
-static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, size_t in_len, Uint32 pos) {
+static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, size_t in_len, Uint32 pos, Undo_Group undo_group) {
 	buffer_insert_text_no_undo(ctx, buffer, in, in_len, pos);
 	push_undo_op(ctx, (buffer - &ctx->buffers[0]) / sizeof *buffer, (Undo_Operation) {
 		.type = Undo_Type_insert,
+		.group = undo_group,
 		.pos = pos,
 		.len = in_len,
-		.data = SDL_strdup(in),
+		.data = SDL_strndup(in, in_len),
 	});
 }
 
@@ -1247,8 +1293,8 @@ static void log_handler(void *userdata, int category, SDL_LogPriority priority, 
 	(void) category;
 	(void) priority;
 	Ctx *ctx = (Ctx *)userdata;
-	buffer_insert_text(ctx, ctx->log_buffer, message, SDL_strlen(message), ctx->log_buffer->text_size);
-	buffer_insert_text(ctx, ctx->log_buffer, "\n", 1, ctx->log_buffer->text_size);
+	buffer_insert_text_no_undo(ctx, ctx->log_buffer, message, SDL_strlen(message), ctx->log_buffer->text_size);
+	buffer_insert_text_no_undo(ctx, ctx->log_buffer, "\n", 1, ctx->log_buffer->text_size);
 }
 
 static void render_background(Ctx *ctx) {
@@ -1509,7 +1555,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						const char *previous = current;
 						SDL_StepBackUTF8(current_frame->buffer->text, &previous);
 						size_t diff = current - previous;
-						buffer_delete_text(ctx, (current_frame->buffer - ctx->buffers) / sizeof current_frame->buffer, current_frame->cursor - diff, current_frame->cursor);
+						buffer_delete_text(ctx, (current_frame->buffer - ctx->buffers) / sizeof current_frame->buffer, current_frame->cursor - diff, current_frame->cursor, Undo_Group_keyboard);
 					}
 					if (current_frame->frame_type == Frame_Type_search) {
 						update_search(ctx, ctx->focused_frame);
@@ -1595,14 +1641,14 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						break;
 					}
 					if (frame_is_multiline(ctx, ctx->focused_frame)) {
-						buffer_insert_text(ctx, current_frame->buffer, &nl, 1, current_frame->cursor);
+						buffer_insert_text(ctx, current_frame->buffer, &nl, 1, current_frame->cursor, Undo_Group_keyboard);
 						ctx->should_render = true;
 					}
 				}; break;
 				case SDL_SCANCODE_TAB: {
 					ctx->moving_col = false;
 					char nl = '\t';
-					buffer_insert_text(ctx, current_frame->buffer, &nl, 1, current_frame->cursor);
+					buffer_insert_text(ctx, current_frame->buffer, &nl, 1, current_frame->cursor, Undo_Group_keyboard);
 					ctx->should_render = true;
 				}; break;
 				case SDL_SCANCODE_UP: {
@@ -1678,18 +1724,20 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 					}
 				} break;
 				case SDLK_SLASH: {
-					if (current_frame->buffer->undos_cursor <= 0) break;
-					Undo_Operation op = current_frame->buffer->undos[current_frame->buffer->undos_cursor - 1];
-					if (op.type == Undo_Type_insert) {
-						buffer_delete_text_no_undo(ctx, (current_frame->buffer - ctx->buffers) / sizeof *current_frame->buffer, op.pos, op.pos + op.len);
-						current_frame->buffer->undos_cursor -= 1;
-					} else if (op.type == Undo_Type_delete) {
-						buffer_insert_text_no_undo(ctx, current_frame->buffer, op.data, op.len, op.pos);
-						current_frame->buffer->undos_cursor -= 1;
-					} else {
-						SDL_assert(!"Unknown Undo type operation");
+					if (ctx->keymod & SDL_KMOD_CTRL) {
+						if (current_frame->buffer->undos_cursor <= 0) break;
+						Undo_Operation op = current_frame->buffer->undos[current_frame->buffer->undos_cursor - 1];
+						if (op.type == Undo_Type_insert) {
+							buffer_delete_text_no_undo(ctx, (current_frame->buffer - ctx->buffers) / sizeof *current_frame->buffer, op.pos, op.pos + op.len);
+							current_frame->buffer->undos_cursor -= 1;
+						} else if (op.type == Undo_Type_delete) {
+							buffer_insert_text_no_undo(ctx, current_frame->buffer, op.data, op.len, op.pos);
+							current_frame->buffer->undos_cursor -= 1;
+						} else {
+							SDL_assert(!"Unknown Undo type operation");
+						}
+						ctx->should_render = true;
 					}
-					ctx->should_render = true;
 				} break;
 				case SDLK_P: {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
@@ -1743,7 +1791,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						current_frame->buffer->text[selection_max] = '\0';
 						SDL_SetClipboardText(current_frame->buffer->text + selection_min);
 						current_frame->buffer->text[selection_max] = ch;
-						buffer_delete_text(ctx, (current_frame->buffer - ctx->buffers) / sizeof *current_frame->buffer, selection_min, selection_max);
+						buffer_delete_text(ctx, (current_frame->buffer - ctx->buffers) / sizeof *current_frame->buffer, selection_min, selection_max, Undo_Group_clipboard);
 					} else if (ctx->keymod & SDL_KMOD_ALT) {
 						current_frame->active_selection = false;
 						ctx->moving_col = false;
@@ -1759,7 +1807,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
 						current_frame->active_selection = false;
 						char *text = SDL_GetClipboardText();
-						buffer_insert_text(ctx, current_frame->buffer, text, SDL_strlen(text), current_frame->cursor);
+						buffer_insert_text(ctx, current_frame->buffer, text, SDL_strlen(text), current_frame->cursor, Undo_Group_clipboard);
 						SDL_free(text);
 					}
 				} break;
@@ -1920,7 +1968,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 			if (ctx->keymod & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) break;
 			current_frame->active_selection = false;
 			ctx->moving_col = false;
-			buffer_insert_text(ctx, current_frame->buffer, event->text.text, SDL_strlen(event->text.text), current_frame->cursor);
+			buffer_insert_text(ctx, current_frame->buffer, event->text.text, SDL_strlen(event->text.text), current_frame->cursor, Undo_Group_keyboard);
 			if (current_frame->frame_type == Frame_Type_search) {
 				update_search(ctx, ctx->focused_frame);
 			}
