@@ -1725,18 +1725,33 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 				} break;
 				case SDLK_SLASH: {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
-						if (current_frame->buffer->undos_cursor <= 0) break;
-						Undo_Operation op = current_frame->buffer->undos[current_frame->buffer->undos_cursor - 1];
-						if (op.type == Undo_Type_insert) {
-							buffer_delete_text_no_undo(ctx, (current_frame->buffer - ctx->buffers) / sizeof *current_frame->buffer, op.pos, op.pos + op.len);
-							current_frame->buffer->undos_cursor -= 1;
-						} else if (op.type == Undo_Type_delete) {
-							buffer_insert_text_no_undo(ctx, current_frame->buffer, op.data, op.len, op.pos);
-							current_frame->buffer->undos_cursor -= 1;
+						if (ctx->keymod & SDL_KMOD_SHIFT) {
+							if (current_frame->buffer->undos_cursor >= current_frame->buffer->undos_size) break;
+							Undo_Operation op = current_frame->buffer->undos[current_frame->buffer->undos_cursor];
+							if (op.type == Undo_Type_insert) {
+								buffer_insert_text_no_undo(ctx, current_frame->buffer, op.data, op.len, op.pos);
+								current_frame->buffer->undos_cursor += 1;
+							} else if (op.type == Undo_Type_delete) {
+								buffer_delete_text_no_undo(ctx, (current_frame->buffer - ctx->buffers) / sizeof *current_frame->buffer, op.pos, op.pos + op.len);
+								current_frame->buffer->undos_cursor += 1;
+							} else {
+								SDL_assert(!"Unknown Undo type operation");
+							}
+							ctx->should_render = true;
 						} else {
-							SDL_assert(!"Unknown Undo type operation");
+							if (current_frame->buffer->undos_cursor <= 0) break;
+							Undo_Operation op = current_frame->buffer->undos[current_frame->buffer->undos_cursor - 1];
+							if (op.type == Undo_Type_insert) {
+								buffer_delete_text_no_undo(ctx, (current_frame->buffer - ctx->buffers) / sizeof *current_frame->buffer, op.pos, op.pos + op.len);
+								current_frame->buffer->undos_cursor -= 1;
+							} else if (op.type == Undo_Type_delete) {
+								buffer_insert_text_no_undo(ctx, current_frame->buffer, op.data, op.len, op.pos);
+								current_frame->buffer->undos_cursor -= 1;
+							} else {
+								SDL_assert(!"Unknown Undo type operation");
+							}
+							ctx->should_render = true;
 						}
-						ctx->should_render = true;
 					}
 				} break;
 				case SDLK_P: {
