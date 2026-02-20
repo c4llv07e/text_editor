@@ -2003,6 +2003,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 	return SDL_APP_CONTINUE;
 }
 
+#ifdef DEBUG_QUIT
 static void buffer_deallocate(Ctx *ctx, Uint32 bufid) {
 	TextBuffer *buffer = &ctx->buffers[bufid];
 	buffer->undos_cursor = 0;
@@ -2019,6 +2020,7 @@ static void frame_deallocate(Ctx *ctx, Frame *frame) {
 	frame->buffer->refcount -= 1;
 	frame->taken = false;
 }
+#endif
 
 void SDL_AppQuit(void *appstate, SDL_AppResult result) {
 	Ctx *ctx = (Ctx *)appstate;
