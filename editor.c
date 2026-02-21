@@ -357,7 +357,7 @@ static void buffer_insert_text_no_undo(Ctx *ctx, TextBuffer *buffer, const char 
 
 static void buffer_insert_text(Ctx *ctx, TextBuffer *buffer, const char *in, size_t in_len, Uint32 pos, Undo_Group undo_group) {
 	buffer_insert_text_no_undo(ctx, buffer, in, in_len, pos);
-	push_undo_op(ctx, (buffer - &ctx->buffers[0]) / sizeof *buffer, (Undo_Operation) {
+	push_undo_op(ctx, (buffer - &ctx->buffers[0]), (Undo_Operation) {
 		.type = Undo_Type_insert,
 		.group = undo_group,
 		.pos = pos,
@@ -711,6 +711,49 @@ static void frame_next_char(Ctx *ctx, Uint32 frame) {
 	const char *text = &current_frame->buffer->text[current_frame->cursor];
 	size_t len = current_frame->buffer->text_size - current_frame->cursor;
 	SDL_StepUTF8(&text, &len);
+	current_frame->cursor = text - current_frame->buffer->text;
+	ctx->should_render = true;
+}
+
+static inline bool is_word_char(Uint32 ch) {
+	return SDL_isalnum(ch);
+}
+
+static void frame_next_word(Ctx *ctx, Uint32 frame) {
+	Frame *current_frame = &ctx->frames[frame];
+	ctx->moving_col = false;
+	current_frame->scroll_lock = true;
+	if (current_frame->buffer->text_size == 0) return;
+	const char *text = &current_frame->buffer->text[current_frame->cursor];
+	size_t len = current_frame->buffer->text_size - current_frame->cursor;
+	Uint32 cp;
+	do {
+		cp = SDL_StepUTF8(&text, &len);
+	} while (cp != 0 && !is_word_char(cp));
+	do {
+		cp = SDL_StepUTF8(&text, &len);
+	} while (is_word_char(cp));
+	if (cp != 0)
+		SDL_StepBackUTF8(current_frame->buffer->text, &text);
+	current_frame->cursor = text - current_frame->buffer->text;
+	ctx->should_render = true;
+}
+
+static void frame_previous_word(Ctx *ctx, Uint32 frame) {
+	Frame *current_frame = &ctx->frames[frame];
+	ctx->moving_col = false;
+	current_frame->scroll_lock = true;
+	if (current_frame->buffer->text_size == 0) return;
+	const char *text = &current_frame->buffer->text[current_frame->cursor];
+	Uint32 cp;
+	do {
+		cp = SDL_StepBackUTF8(current_frame->buffer->text, &text);
+	} while (cp != 0 && !is_word_char(cp));
+	do {
+		cp = SDL_StepBackUTF8(current_frame->buffer->text, &text);
+	} while (is_word_char(cp));
+	if (cp != 0)
+		SDL_StepUTF8(&text, 0);
 	current_frame->cursor = text - current_frame->buffer->text;
 	ctx->should_render = true;
 }
@@ -1555,7 +1598,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						const char *previous = current;
 						SDL_StepBackUTF8(current_frame->buffer->text, &previous);
 						size_t diff = current - previous;
-						buffer_delete_text(ctx, (current_frame->buffer - ctx->buffers) / sizeof current_frame->buffer, current_frame->cursor - diff, current_frame->cursor, Undo_Group_keyboard);
+						buffer_delete_text(ctx, (current_frame->buffer - ctx->buffers), current_frame->cursor - diff, current_frame->cursor, Undo_Group_keyboard);
 					}
 					if (current_frame->frame_type == Frame_Type_search) {
 						update_search(ctx, ctx->focused_frame);
@@ -1672,6 +1715,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 				case SDLK_F: {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
 						frame_next_char(ctx, ctx->focused_frame);
+					} else if (ctx->keymod & SDL_KMOD_ALT) {
+						frame_next_word(ctx, ctx->focused_frame);
 					}
 				}; break;
 				case SDLK_S: {
@@ -1736,7 +1781,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 								buffer_insert_text_no_undo(ctx, current_frame->buffer, op.data, op.len, op.pos);
 								current_frame->buffer->undos_cursor += 1;
 							} else if (op.type == Undo_Type_delete) {
-								buffer_delete_text_no_undo(ctx, (current_frame->buffer - ctx->buffers) / sizeof *current_frame->buffer, op.pos, op.pos + op.len);
+								buffer_delete_text_no_undo(ctx, (current_frame->buffer - ctx->buffers), op.pos, op.pos + op.len);
 								current_frame->buffer->undos_cursor += 1;
 							} else {
 								SDL_assert(!"Unknown Undo type operation");
@@ -1746,7 +1791,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 							if (current_frame->buffer->undos_cursor <= 0) break;
 							Undo_Operation op = current_frame->buffer->undos[current_frame->buffer->undos_cursor - 1];
 							if (op.type == Undo_Type_insert) {
-								buffer_delete_text_no_undo(ctx, (current_frame->buffer - ctx->buffers) / sizeof *current_frame->buffer, op.pos, op.pos + op.len);
+								buffer_delete_text_no_undo(ctx, (current_frame->buffer - ctx->buffers), op.pos, op.pos + op.len);
 								current_frame->buffer->undos_cursor -= 1;
 							} else if (op.type == Undo_Type_delete) {
 								buffer_insert_text_no_undo(ctx, current_frame->buffer, op.data, op.len, op.pos);
@@ -1787,17 +1832,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
 						frame_previous_char(ctx, ctx->focused_frame);
 					} else if (ctx->keymod & SDL_KMOD_ALT) {
-						current_frame->bounds.w /= 2;
-						SDL_FRect bounds = current_frame->bounds;
-						bounds.x += bounds.w;
-						Uint32 frame = append_frame(ctx, current_frame->buffer, bounds);
-						if (frame == (Uint32)-1) {
-							SDL_Log("Error, can't open new frame");
-							break;
-						}
-						set_focused_frame(ctx, frame);
-						current_frame = &ctx->frames[ctx->focused_frame];
-						ctx->should_render = true;
+						frame_previous_word(ctx, ctx->focused_frame);
 					}
 				}; break;
 				case SDLK_W: {
@@ -1810,7 +1845,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						current_frame->buffer->text[selection_max] = '\0';
 						SDL_SetClipboardText(current_frame->buffer->text + selection_min);
 						current_frame->buffer->text[selection_max] = ch;
-						buffer_delete_text(ctx, (current_frame->buffer - ctx->buffers) / sizeof *current_frame->buffer, selection_min, selection_max, Undo_Group_clipboard);
+						buffer_delete_text(ctx, (current_frame->buffer - ctx->buffers), selection_min, selection_max, Undo_Group_clipboard);
 					} else if (ctx->keymod & SDL_KMOD_ALT) {
 						current_frame->active_selection = false;
 						ctx->moving_col = false;
