@@ -87,6 +87,7 @@ typedef struct Frame {
 	bool searching_mode;
 	Uint32 search_frame;
 	Uint32 search_cursor;
+	bool search_backwards;
 	Search_Status search_status;
 	Ask_Option ask_option;
 	char *filename;
@@ -419,6 +420,16 @@ static inline void frame_scroll_to_line_centered(Ctx *ctx, Uint32 frame, Sint32 
 	ctx->frames[frame].scroll.y = -line * ctx->line_height;
 }
 
+static inline char *strnstr_r(char *start, size_t len, const char *needle) {
+	size_t needle_len = SDL_strlen(needle);
+	char *end = start + len - needle_len;
+	while (start < end) {
+		if (SDL_strncmp(end, needle, needle_len) == 0) return end;
+		end--;
+	}
+	return NULL;
+}
+
 static void update_search(Ctx *ctx, Uint32 search_frame) {
 	SDL_assert(ctx->frames[search_frame].taken);
 	Uint32 parent_frame = ctx->frames[search_frame].parent_frame;
@@ -428,16 +439,21 @@ static void update_search(Ctx *ctx, Uint32 search_frame) {
 		ctx->should_render = true;
 		return;
 	}
-	char *first_found_ptr = SDL_strnstr(ctx->frames[parent_frame].buffer->text + ctx->frames[parent_frame].cursor,
-		ctx->frames[search_frame].buffer->text,
-		ctx->frames[parent_frame].buffer->text_size - ctx->frames[parent_frame].cursor);
-	if (first_found_ptr == NULL) {
+	char *found_ptr;
+	if (ctx->frames[search_frame].search_backwards) {
+		found_ptr = strnstr_r(ctx->frames[parent_frame].buffer->text, ctx->frames[parent_frame].cursor, ctx->frames[search_frame].buffer->text);
+	} else {
+		found_ptr = SDL_strnstr(ctx->frames[parent_frame].buffer->text + ctx->frames[parent_frame].cursor,
+			ctx->frames[search_frame].buffer->text,
+			ctx->frames[parent_frame].buffer->text_size - ctx->frames[parent_frame].cursor);
+	}
+	if (found_ptr == NULL) {
 		ctx->frames[search_frame].search_status = Search_Status_not_found;
 		ctx->should_render = true;
 		return;
 	}
 	ctx->frames[search_frame].search_status = Search_Status_found;
-	ctx->frames[parent_frame].search_cursor = first_found_ptr - ctx->frames[parent_frame].buffer->text;
+	ctx->frames[parent_frame].search_cursor = found_ptr - ctx->frames[parent_frame].buffer->text;
 	Uint32 line = count_lines(ctx, ctx->frames[parent_frame].search_cursor, ctx->frames[parent_frame].buffer->text);
 	frame_scroll_to_line_centered(ctx, parent_frame, line);
 	ctx->should_render = true;
@@ -752,6 +768,8 @@ static void frame_delete_previous_word(Ctx *ctx, Uint32 framei, Undo_Group undo_
 	do {
 		cp = SDL_StepBackUTF8(frame->buffer->text, &previous);
 	} while (cp != 0 && is_word_char(cp));
+	if (cp != 0)
+		SDL_StepUTF8(&previous, 0);
 	size_t diff = current - previous;
 	buffer_delete_text(ctx, (frame->buffer - ctx->buffers), frame->cursor - diff, frame->cursor, undo_group);
 }
@@ -1124,6 +1142,9 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		0x10, 0x10,
 	});
 #endif
+#ifdef DEBUG_CURSOR
+	draw_text_fmt(ctx, bounds.x + bounds.w - 0x10 * ctx->font_width, bounds.y + bounds.h - ctx->line_height * 2, text_color, "%u", draw_frame->cursor);
+#endif
 #ifdef DEBUG_FILES
 	if (draw_frame->filename) {
 		SDL_SetRenderDrawColor(ctx->renderer, 0x20, 0x20, 0x20, SDL_ALPHA_OPAQUE);
@@ -1418,6 +1439,37 @@ static void log_handler(void *userdata, int category, SDL_LogPriority priority, 
 	Ctx *ctx = (Ctx *)userdata;
 	buffer_insert_text_no_undo(ctx, ctx->log_buffer, message, SDL_strlen(message), ctx->log_buffer->text_size);
 	buffer_insert_text_no_undo(ctx, ctx->log_buffer, "\n", 1, ctx->log_buffer->text_size);
+}
+
+// Returns framei on fail
+static Uint32 frame_search_create(Ctx *ctx, Uint32 framei, bool search_backwards) {
+	Frame *frame = &ctx->frames[framei];
+	SDL_assert(frame->taken);
+	SDL_assert(!frame->searching_mode);
+	frame->searching_mode = true;
+	frame->search_cursor = frame->cursor;
+	char *buffer_name;
+	SDL_asprintf(&buffer_name, "%d search", framei);
+	TextBuffer *search_buffer = allocate_buffer(ctx, buffer_name);
+	if (search_buffer == NULL) {
+		SDL_LogError(0, "Can't create buffer for ask frame\n");
+		return framei;
+	}
+	#define SEARCH_MARGIN 0x20
+	SDL_FRect bounds = {
+		.x = frame->bounds.x + SEARCH_MARGIN,
+		.y = frame->bounds.y + SEARCH_MARGIN,
+		.w = frame->bounds.w - SEARCH_MARGIN * 2,
+		.h = ctx->font_size,
+	};
+	Uint32 search_frame = append_frame(ctx, search_buffer, bounds);
+	ctx->frames[search_frame].frame_type = Frame_Type_search;
+	ctx->frames[search_frame].parent_frame = framei;
+	ctx->frames[search_frame].search_status = Search_Status_not_found;
+	ctx->frames[search_frame].search_backwards = search_backwards;
+	frame->search_frame = search_frame;
+	ctx->should_render = true;
+	return search_frame;
 }
 
 static void render_background(Ctx *ctx) {
@@ -1823,36 +1875,35 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						frame_forward_paragraph(ctx, ctx->focused_frame);
 					}
 				} break;
+				case SDLK_R: {
+					if (ctx->keymod & SDL_KMOD_CTRL) {
+						if (current_frame->frame_type == Frame_Type_search) {
+							current_frame->search_backwards = true;
+							update_search(ctx, ctx->focused_frame);
+							if (current_frame->search_status == Search_Status_not_found) break;
+							ctx->frames[current_frame->parent_frame].cursor =
+								ctx->frames[current_frame->parent_frame].search_cursor;
+						} else {
+							Uint32 search_frame = frame_search_create(ctx, ctx->focused_frame, true);
+							SDL_assert(search_frame != ctx->focused_frame);
+							set_focused_frame(ctx, search_frame);
+							current_frame = &ctx->frames[ctx->focused_frame];
+							ctx->should_render = true;
+						}
+					}
+				} break;
 				case SDLK_Q: {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
 						if (current_frame->frame_type == Frame_Type_search) {
+							current_frame->search_backwards = false;
+							update_search(ctx, ctx->focused_frame);
 							if (current_frame->search_status == Search_Status_not_found) break;
 							ctx->frames[current_frame->parent_frame].cursor =
 								ctx->frames[current_frame->parent_frame].search_cursor
 								+ current_frame->buffer->text_size;
-							update_search(ctx, ctx->focused_frame);
 						} else {
-							current_frame->searching_mode = true;
-							current_frame->search_cursor = current_frame->cursor;
-							char *buffer_name;
-							SDL_asprintf(&buffer_name, "%d search", ctx->focused_frame);
-							TextBuffer *search_buffer = allocate_buffer(ctx, buffer_name);
-							if (search_buffer == NULL) {
-								SDL_LogError(0, "Can't create buffer for ask frame\n");
-								break;
-							}
-							#define SEARCH_MARGIN 0x20
-							SDL_FRect bounds = {
-								.x = current_frame->bounds.x + SEARCH_MARGIN,
-								.y = current_frame->bounds.y + SEARCH_MARGIN,
-								.w = current_frame->bounds.w - SEARCH_MARGIN * 2,
-								.h = ctx->font_size,
-							};
-							Uint32 search_frame = append_frame(ctx, search_buffer, bounds);
-							ctx->frames[search_frame].frame_type = Frame_Type_search;
-							ctx->frames[search_frame].parent_frame = ctx->focused_frame;
-							ctx->frames[search_frame].search_status = Search_Status_not_found;
-							current_frame->search_frame = search_frame;
+							Uint32 search_frame = frame_search_create(ctx, ctx->focused_frame, false);
+							SDL_assert(search_frame != ctx->focused_frame);
 							set_focused_frame(ctx, search_frame);
 							current_frame = &ctx->frames[ctx->focused_frame];
 							ctx->should_render = true;
