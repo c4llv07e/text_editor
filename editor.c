@@ -719,6 +719,36 @@ static inline bool is_word_char(Uint32 ch) {
 	return SDL_isalnum(ch);
 }
 
+static void frame_delete_previous_char(Ctx *ctx, Uint32 framei, Undo_Group undo_group) {
+	Frame *frame = &ctx->frames[framei];
+	SDL_assert(frame->taken);
+	ctx->moving_col = false;
+	if (frame->cursor <= 0 || frame->buffer->text_size <= 0) return;
+	const char *current = frame->buffer->text + frame->cursor;
+	const char *previous = current;
+	SDL_StepBackUTF8(frame->buffer->text, &previous);
+	size_t diff = current - previous;
+	buffer_delete_text(ctx, (frame->buffer - ctx->buffers), frame->cursor - diff, frame->cursor, undo_group);
+}
+
+static void frame_delete_previous_word(Ctx *ctx, Uint32 framei, Undo_Group undo_group) {
+	Frame *frame = &ctx->frames[framei];
+	SDL_assert(frame->taken);
+	ctx->moving_col = false;
+	if (frame->cursor <= 0 || frame->buffer->text_size <= 0) return;
+	const char *current = frame->buffer->text + frame->cursor;
+	const char *previous = current;
+	Uint32 cp;
+	do {
+		cp = SDL_StepBackUTF8(frame->buffer->text, &previous);
+	} while (cp != 0 && !is_word_char(cp));
+	do {
+		cp = SDL_StepBackUTF8(frame->buffer->text, &previous);
+	} while (cp != 0 && is_word_char(cp));
+	size_t diff = current - previous;
+	buffer_delete_text(ctx, (frame->buffer - ctx->buffers), frame->cursor - diff, frame->cursor, undo_group);
+}
+
 static void frame_next_word(Ctx *ctx, Uint32 frame) {
 	Frame *current_frame = &ctx->frames[frame];
 	ctx->moving_col = false;
@@ -1592,13 +1622,10 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 					frame_next_char(ctx, ctx->focused_frame);
 				}; break;
 				case SDL_SCANCODE_BACKSPACE: {
-					ctx->moving_col = false;
-					if (current_frame->cursor > 0 && current_frame->buffer->text_size > 0) {
-						const char *current = current_frame->buffer->text + current_frame->cursor;
-						const char *previous = current;
-						SDL_StepBackUTF8(current_frame->buffer->text, &previous);
-						size_t diff = current - previous;
-						buffer_delete_text(ctx, (current_frame->buffer - ctx->buffers), current_frame->cursor - diff, current_frame->cursor, Undo_Group_keyboard);
+					if (ctx->keymod & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) {
+						frame_delete_previous_word(ctx, ctx->focused_frame, Undo_Group_keyboard);
+					} else {
+						frame_delete_previous_char(ctx, ctx->focused_frame, Undo_Group_keyboard);
 					}
 					if (current_frame->frame_type == Frame_Type_search) {
 						update_search(ctx, ctx->focused_frame);
