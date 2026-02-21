@@ -551,8 +551,8 @@ static void render_line(Ctx *ctx, SDL_FRect frame, size_t text_size, const char 
 				frame.w -= offset;
 			}
 			SDL_RenderTexture(ctx->renderer, ctx->tab_texture, NULL, &(SDL_FRect) {
-				.x = frame.x,
-				.y = frame.y,
+				.x = SDL_floor(frame.x),
+				.y = SDL_floor(frame.y),
 				.w = ctx->font_width * TAB_WIDTH,
 				.h = ctx->font_size,
 			});
@@ -568,8 +568,8 @@ static void render_line(Ctx *ctx, SDL_FRect frame, size_t text_size, const char 
 				frame.w -= offset;
 			}
 			SDL_RenderTexture(ctx->renderer, ctx->space_texture, NULL, &(SDL_FRect) {
-				.x = frame.x,
-				.y = frame.y,
+				.x = SDL_floor(frame.x),
+				.y = SDL_floor(frame.y),
 				.w = ctx->font_width,
 				.h = ctx->font_size,
 			});
