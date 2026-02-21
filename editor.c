@@ -641,6 +641,13 @@ static Uint32 split_into_lines(Ctx *ctx, Uint32 strings_length, String strings[s
 	return SDL_max(0, line);
 }
 
+static void frame_cursor_moved(Ctx *ctx, Uint32 framei) {
+	Frame *frame = &ctx->frames[framei];
+	SDL_assert(frame->taken);
+	Uint32 line = count_lines(ctx, frame->cursor, frame->buffer->text);
+	frame_scroll_to_line_centered(ctx, framei, line);
+}
+
 static void frame_beggining_line(Ctx *ctx, Uint32 frame) {
 	Uint32 cp;
 	Frame *current_frame = &ctx->frames[frame];
@@ -747,6 +754,49 @@ static void frame_delete_previous_word(Ctx *ctx, Uint32 framei, Undo_Group undo_
 	} while (cp != 0 && is_word_char(cp));
 	size_t diff = current - previous;
 	buffer_delete_text(ctx, (frame->buffer - ctx->buffers), frame->cursor - diff, frame->cursor, undo_group);
+}
+
+static void frame_forward_paragraph(Ctx *ctx, Uint32 frame) {
+	Frame *current_frame = &ctx->frames[frame];
+	SDL_assert(current_frame->taken);
+	ctx->moving_col = false;
+	current_frame->scroll_lock = true;
+	if (current_frame->buffer->text_size == 0) return;
+	const char *text = &current_frame->buffer->text[current_frame->cursor];
+	size_t len = current_frame->buffer->text_size - current_frame->cursor;
+	Uint32 prev_cp;
+	Uint32 cp;
+	while (true) {
+		cp = SDL_StepUTF8(&text, &len);
+		if (cp == 0 || (cp == '\n' && prev_cp == '\n')) break;
+		prev_cp = cp;
+	}
+	if (cp != 0)
+		SDL_StepBackUTF8(current_frame->buffer->text, &text);
+	current_frame->cursor = text - current_frame->buffer->text;
+	frame_cursor_moved(ctx, frame);
+	ctx->should_render = true;
+}
+
+static void frame_backward_paragraph(Ctx *ctx, Uint32 frame) {
+	Frame *current_frame = &ctx->frames[frame];
+	SDL_assert(current_frame->taken);
+	ctx->moving_col = false;
+	current_frame->scroll_lock = true;
+	if (current_frame->buffer->text_size == 0) return;
+	const char *text = &current_frame->buffer->text[current_frame->cursor];
+	Uint32 prev_cp;
+	Uint32 cp;
+	while (true) {
+		cp = SDL_StepBackUTF8(current_frame->buffer->text, &text);
+		if (cp == 0 || (cp == '\n' && prev_cp == '\n')) break;
+		prev_cp = cp;
+	}
+	if (cp != 0)
+		SDL_StepUTF8(&text, 0);
+	current_frame->cursor = text - current_frame->buffer->text;
+	frame_cursor_moved(ctx, frame);
+	ctx->should_render = true;
 }
 
 static void frame_next_word(Ctx *ctx, Uint32 frame) {
@@ -1763,6 +1813,16 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						}
 					}
 				}; break;
+				case SDLK_LEFTBRACE: {
+					if (ctx->keymod & SDL_KMOD_ALT) {
+						frame_backward_paragraph(ctx, ctx->focused_frame);
+					}
+				} break;
+				case SDLK_RIGHTBRACE: {
+					if (ctx->keymod & SDL_KMOD_ALT) {
+						frame_forward_paragraph(ctx, ctx->focused_frame);
+					}
+				} break;
 				case SDLK_Q: {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
 						if (current_frame->frame_type == Frame_Type_search) {
