@@ -1596,6 +1596,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 	}
 	if (ctx->should_render) {
 		render(ctx, false);
+	} else {
+		SDL_Delay(1);
 	}
 	ctx->last_render = current_time;
 	return SDL_APP_CONTINUE;
