@@ -861,7 +861,6 @@ static void frame_previous_line(Ctx *ctx, Uint32 frame) {
 	int row = 0;
 	current_frame->scroll_lock = true;
 	if (current_frame->buffer->text_size == 0) return;
-	SDL_FRect bounds;
 	const char *cur = current_frame->buffer->text + current_frame->cursor;
 	Uint32 cp = -1;
 	while (true) {
@@ -890,12 +889,7 @@ static void frame_previous_line(Ctx *ctx, Uint32 frame) {
 	};
 update_cursor:
 	current_frame->cursor = cur - current_frame->buffer->text;
-	get_frame_render_text_rect(ctx, frame, &bounds);
-	Uint32 line_start = SDL_floor((-current_frame->scroll.y) / ctx->line_height);
-	String start_line = get_line(ctx, current_frame->buffer->text_size, current_frame->buffer->text, line_start);
-	if (start_line.text != NULL && start_line.text - current_frame->buffer->text > current_frame->cursor) {
-		current_frame->scroll.y = -((line_start * ctx->line_height) - bounds.h);
-	}
+	frame_cursor_moved(ctx, frame);
 }
 
 static void frame_next_line(Ctx *ctx, Uint32 frame) {
@@ -903,7 +897,6 @@ static void frame_next_line(Ctx *ctx, Uint32 frame) {
 	int row = 0;
 	current_frame->scroll_lock = true;
 	if (current_frame->buffer->text_size == 0) return;
-	SDL_FRect bounds;
 	const char *cur = current_frame->buffer->text + current_frame->cursor;
 	Uint32 cp = -1;
 	while (true) {
@@ -931,13 +924,7 @@ static void frame_next_line(Ctx *ctx, Uint32 frame) {
 		else row -= 1;
 	};
 	current_frame->cursor = cur - current_frame->buffer->text;
-	get_frame_render_text_rect(ctx, frame, &bounds);
-	Sint32 line_end = SDL_floor((bounds.h - SDL_min(0, current_frame->scroll.y)) / ctx->line_height);
-	if (line_end < 0) line_end = 0;
-	String end_line = get_line(ctx, current_frame->buffer->text_size, current_frame->buffer->text, line_end);
-	if (end_line.text != NULL && end_line.text - current_frame->buffer->text < current_frame->cursor) {
-		current_frame->scroll.y = -(line_end * ctx->line_height);
-	}
+	frame_cursor_moved(ctx, frame);
 }
 
 static void render_frame(Ctx *ctx, Uint32 frame) {
@@ -981,6 +968,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			.w = lines_bounds.w,
 			.h = ctx->line_height,
 		};
+		if (line_bounds.y + 2 < lines_bounds.y) continue;
 		if (line_bounds.y + line_bounds.h > lines_bounds.y + lines_bounds.h + 4) break;
 		String line = lines[linenum];
 		if (draw_frame->line_prefix != NULL) {
@@ -1114,7 +1102,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	}
 	if (frame_has_line_numbers(ctx, frame)) {
 		SDL_Color current_color = line_number_color;
-		for (Uint32 linenum = line_start; (linenum - line_start + 1) * ctx->line_height < lines_numbers_bounds.h; ++linenum) {
+		for (Uint32 linenum = line_start; (linenum - line_start) * ctx->line_height <= lines_numbers_bounds.h; ++linenum) {
 #ifdef LINE_NUMS_DIM_SPACE
 			if (linenum > lines_count + line_start || lines[linenum].size <= 0) current_color = line_number_dimmed_color;
 			else current_color = line_number_color;
@@ -1797,6 +1785,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 							current_frame->buffer->refcount -= 1;
 							ctx->focused_frame = current_frame->parent_frame;
 							current_frame = &ctx->frames[ctx->focused_frame];
+							Uint32 line = count_lines(ctx, current_frame->cursor, current_frame->buffer->text);
+							frame_scroll_to_line_centered(ctx, ctx->focused_frame, line);
 							ctx->should_render = true;
 						} else {
 							SDL_LogError(0, ("Unknown ask option: %" SDL_PRIu32), (Uint32)current_frame->ask_option);
@@ -1943,6 +1933,11 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						}
 					}
 				} break;
+				case SDLK_L: {
+					Uint32 line = count_lines(ctx, current_frame->cursor, current_frame->buffer->text);
+					frame_scroll_to_line_centered(ctx, ctx->focused_frame, line);
+					ctx->should_render = true;
+				} break;
 				case SDLK_P: {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
 						frame_previous_line(ctx, ctx->focused_frame);
@@ -1996,6 +1991,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						SDL_SetClipboardText(current_frame->buffer->text + selection_min);
 						current_frame->buffer->text[selection_max] = ch;
 					}
+					ctx->should_render = true;
 				} break;
 				case SDLK_Y: {
 					if (ctx->keymod & SDL_KMOD_CTRL) {
@@ -2046,6 +2042,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 						current_frame->selection = current_frame->cursor;
 						current_frame->cursor = temp;
 						ctx->moving_col = false;
+						Uint32 line = count_lines(ctx, current_frame->cursor, current_frame->buffer->text);
+						frame_scroll_to_line_centered(ctx, ctx->focused_frame, line);
 						ctx->should_render = true;
 					} else if (ctx->keymod & SDL_KMOD_ALT) {
 						current_frame->buffer->refcount -= 1;

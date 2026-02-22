@@ -3,8 +3,15 @@
 - Possible layout like acme
 - Use ttf text engine
 	- word wrapping
-- Use ring buffer selection like in emacs
+- Use ring buffer undo like in emacs
 - Running commands
+- List all buffers and open them
+- Auto complete in open buffer
+- Auto complete in text buffer
+- Creation of the new frames
+- scroll centered to cursor on most moves
+	- on ctrl-x
+- Fix text underflow
 
 After complete layouting
 - Store layout in project file
