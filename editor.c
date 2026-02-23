@@ -1016,9 +1016,9 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 				SDL_RenderFillRect(ctx->renderer, &selection_max_rect);
 			}
 		}
-		set_color(ctx, search_background_color);
 		if (draw_frame->searching_mode && ctx->frames[draw_frame->search_frame].buffer->text_size > 0) {
 			const char *search_cursor = line.text;
+			set_color(ctx, search_background_color);
 			while (true) {
 				search_cursor = SDL_strnstr(search_cursor, ctx->frames[draw_frame->search_frame].buffer->text, line.text + line.size - search_cursor);
 				if (search_cursor == NULL) break;
@@ -1035,11 +1035,12 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 				search_cursor += ctx->frames[draw_frame->search_frame].buffer->text_size;
 			}
 		}
-		render_line(ctx, line_bounds, line.size, line.text);
+		Sint32 hscroll = SDL_floor(draw_frame->scroll.x / ctx->font_width);
+		render_line(ctx, line_bounds, SDL_max(0, (Sint32)line.size - hscroll), line.text + hscroll);
 		if (line.text - text <= draw_frame->cursor &&
 			((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->cursor))) {
 			SDL_FPoint actual_cursor_pos = {
-				.x = line_bounds.x + string_to_visual(ctx, SDL_min(line.size, draw_frame->cursor - (line.text - text)), line.text) * ctx->font_width,
+				.x = line_bounds.x + string_to_visual(ctx, SDL_min(line.size, draw_frame->cursor - (line.text - text)), line.text) * ctx->font_width - draw_frame->scroll.x,
 				.y = line_bounds.y,
 			};
 			float speed = 30;
@@ -1089,7 +1090,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		if (line.text - text <= draw_frame->selection &&
 			((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->selection))) {
 			SDL_FRect selection_rect = {
-				.x = line_bounds.x + string_to_visual(ctx, SDL_min(line.size, draw_frame->selection - (line.text - text)), line.text) * ctx->font_width,
+				.x = line_bounds.x + string_to_visual(ctx, SDL_min(line.size, draw_frame->selection - (line.text - text)), line.text) * ctx->font_width - draw_frame->scroll.x,
 				.y = line_bounds.y,
 				.w = ctx->font_width,
 				.h = ctx->font_size,
@@ -1781,6 +1782,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 							parent_frame->cursor = 0;
 							parent_frame->buffer->text_size = parent_frame->buffer->text_capacity;
 							parent_frame->buffer->refcount += 1;
+							parent_frame->scroll.x = 0;
 							current_frame->taken = false;
 							current_frame->buffer->refcount -= 1;
 							ctx->focused_frame = current_frame->parent_frame;
@@ -2155,6 +2157,9 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 				SDL_LogTrace(0, "Scroll %d to %f", ctx->focused_frame, current_frame->scroll.y);
 				ctx->should_render = true;
 			}
+			current_frame->scroll.x += event->wheel.x * ctx->font_width * 3;
+			current_frame->scroll.x = SDL_max(0, current_frame->scroll.x);
+			SDL_LogTrace(0, "HScroll %d to %f", ctx->focused_frame, current_frame->scroll.x);
 		} break;
 		case SDL_EVENT_TEXT_INPUT: {
 			if (ctx->keymod & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) break;

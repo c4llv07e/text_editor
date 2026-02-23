@@ -19,7 +19,6 @@
 	- ctrl-d
 	- alt-d
 - simple auto indent
-- horizontal scroll
 
 After complete layouting
 - Store layout in project file
