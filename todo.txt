@@ -10,8 +10,10 @@
 - Auto complete in text buffer
 - Creation of the new frames
 - scroll centered to cursor on most moves
-	- on ctrl-x
-- Fix text underflow
+	- mouse click
+- Fix linenum underflow
+- sequential pressing ctrl-q should repeat last search
+- holding mouse to select text
 
 After complete layouting
 - Store layout in project file
