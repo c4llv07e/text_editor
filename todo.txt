@@ -14,6 +14,12 @@
 - Fix linenum underflow
 - sequential pressing ctrl-q should repeat last search
 - holding mouse to select text
+- current line highlighting
+- more keybinds
+	- ctrl-d
+	- alt-d
+- simple auto indent
+- horizontal scroll
 
 After complete layouting
 - Store layout in project file
