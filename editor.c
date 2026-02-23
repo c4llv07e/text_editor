@@ -137,6 +137,9 @@ typedef struct Ctx {
 	SDL_FRect debug_screen_rect;
 	Uint64 last_middle_click;
 	SDL_FPoint active_cursor_pos;
+#ifdef DEBUG
+	int draw_text_back_color;
+#endif
 } Ctx;
 
 static const SDL_Color text_color = {0xe6, 0xe6, 0xe6, SDL_ALPHA_OPAQUE};
@@ -524,12 +527,20 @@ static inline int draw_text(Ctx *ctx, float x, float y, SDL_Color color, size_t 
 	SDL_Texture *texture = SDL_CreateTextureFromSurface(ctx->renderer, surface);
 	SDL_assert(texture != NULL);
 	SDL_DestroySurface(surface);
-	SDL_RenderTexture(ctx->renderer, texture, NULL, &(SDL_FRect) {
+	SDL_FRect draw_pos = {
 		.x = SDL_floor(x),
 		.y = SDL_floor(y),
 		.w = texture->w,
 		.h = texture->h,
-	});
+	};
+#if 0
+#ifdef DEBUG
+	set_color(ctx, (SDL_Color[]){debug_red, debug_green, debug_blue}[ctx->draw_text_back_color]);
+	SDL_RenderFillRect(ctx->renderer, &draw_pos);
+	ctx->draw_text_back_color = (ctx->draw_text_back_color + 1) % 3;
+#endif
+#endif
+	SDL_RenderTexture(ctx->renderer, texture, NULL, &draw_pos);
 	int res = texture->w;
 	SDL_DestroyTexture(texture);
 	return res;
@@ -556,42 +567,44 @@ static inline int draw_text_fmt(Ctx *ctx, float x, float y, SDL_Color color, SDL
 	return ret;
 }
 
-static void render_line(Ctx *ctx, SDL_FRect frame, size_t text_size, const char text[text_size]) {
+static void render_line(Ctx *ctx, SDL_FRect bounds, SDL_FPoint *start, size_t text_size, const char text[text_size]) {
 	size_t accum = 0;
 	if (text_size == 0) return;
 	while (text_size > 0 && accum < text_size) {
-		if (SDL_floor(frame.w / ctx->font_width) <= 0) break;
-		if (text[accum] == '\t') {
+		if (start->x + (accum + 1) * ctx->font_width >= bounds.x + bounds.w) {
+			draw_text(ctx, start->x, start->y, text_color, accum, text);
+			start->x = bounds.x;
+			start->y += ctx->line_height;
+			text += accum;
+			text_size -= accum;
+			accum = 0;
+		} else if (text[accum] == '\t') {
 			if (accum != 0) {
-				int offset = draw_text(ctx, frame.x, frame.y, text_color, SDL_min(accum, frame.w / ctx->font_width), text);
-				frame.x += offset;
-				frame.w -= offset;
+				int offset = draw_text(ctx, start->x, start->y, text_color, accum, text);
+				start->x += offset;
 			}
 			SDL_RenderTexture(ctx->renderer, ctx->tab_texture, NULL, &(SDL_FRect) {
-				.x = SDL_floor(frame.x),
-				.y = SDL_floor(frame.y),
+				.x = SDL_floor(start->x),
+				.y = SDL_floor(start->y),
 				.w = ctx->font_width * TAB_WIDTH,
 				.h = ctx->font_size,
 			});
-			frame.x += ctx->font_width * TAB_WIDTH;
-			frame.w -= ctx->font_width * TAB_WIDTH;
+			start->x += ctx->font_width * TAB_WIDTH;
 			text += accum + 1;
 			text_size -= accum + 1;
 			accum = 0;
 		} else if (text[accum] == ' ') {
 			if (accum != 0) {
-				int offset = draw_text(ctx, frame.x, frame.y, text_color, SDL_min(accum, frame.w / ctx->font_width), text);
-				frame.x += offset;
-				frame.w -= offset;
+				int offset = draw_text(ctx, start->x, start->y, text_color, accum, text);
+				start->x += offset;
 			}
 			SDL_RenderTexture(ctx->renderer, ctx->space_texture, NULL, &(SDL_FRect) {
-				.x = SDL_floor(frame.x),
-				.y = SDL_floor(frame.y),
+				.x = start->x,
+				.y = start->y,
 				.w = ctx->font_width,
 				.h = ctx->font_size,
 			});
-			frame.x += ctx->font_width;
-			frame.w -= ctx->font_width;
+			start->x += ctx->font_width;
 			text += accum + 1;
 			text_size -= accum + 1;
 			accum = 0;
@@ -599,9 +612,11 @@ static void render_line(Ctx *ctx, SDL_FRect frame, size_t text_size, const char 
 			accum += 1;
 		}
 	}
-	if (accum != 0 && frame.w > 0) {
-		draw_text(ctx, frame.x, frame.y, text_color, SDL_min(accum, frame.w / ctx->font_width), text);
+	if (accum != 0) {
+		draw_text(ctx, start->x, start->y, text_color, accum, text);
 	}
+	start->x = bounds.x;
+	start->y += ctx->line_height;
 }
 
 static String get_line(Ctx *ctx, size_t text_size, char text[text_size], Uint32 linenum) {
@@ -931,6 +946,9 @@ static void frame_next_line(Ctx *ctx, Uint32 frame) {
 static void render_frame(Ctx *ctx, Uint32 frame) {
 	String lines[0x100];
 	Frame *draw_frame = &ctx->frames[frame];
+#ifdef DEBUG
+	ctx->draw_text_back_color = 0;
+#endif
 	char *text = draw_frame->buffer->text;
 	SDL_FRect bounds, lines_bounds, lines_numbers_bounds;
 	get_frame_render_rect(ctx, frame, &bounds);
@@ -962,6 +980,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, text, line_start);
 	Uint32 selection_min = SDL_min(draw_frame->cursor, draw_frame->selection);
 	Uint32 selection_max = SDL_max(draw_frame->cursor, draw_frame->selection);
+	SDL_FPoint start = {lines_bounds.x, lines_bounds.y + SDL_fmod(SDL_min(0, draw_frame->scroll_interp.y), ctx->line_height)};
 	for (Uint32 linenum = 0; linenum < lines_count; ++linenum) {
 		SDL_FRect line_bounds = {
 			.x = lines_bounds.x,
@@ -1042,7 +1061,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			SDL_RenderFillRect(ctx->renderer, &line_bounds);
 		}
 		Sint32 hscroll = SDL_floor(draw_frame->scroll.x / ctx->font_width);
-		render_line(ctx, line_bounds, SDL_max(0, (Sint32)line.size - hscroll), line.text + hscroll);
+		render_line(ctx, line_bounds, &start, SDL_max(0, (Sint32)line.size - hscroll), line.text);
 		if (line.text - text <= draw_frame->selection &&
 			((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->selection))) {
 			SDL_FRect selection_rect = {
