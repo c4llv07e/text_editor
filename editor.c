@@ -143,6 +143,7 @@ static const SDL_Color text_color = {0xe6, 0xe6, 0xe6, SDL_ALPHA_OPAQUE};
 static const SDL_Color prefix_color = {0x86, 0xf6, 0x86, SDL_ALPHA_OPAQUE};
 static const SDL_Color selection_rect_color = {0xe6 / 3, 0xe6 / 2, 0xe6 / 3, SDL_ALPHA_OPAQUE};
 static const SDL_Color selection_color = {0xe6 / 3 / 2, 0xe6 / 2 / 2, 0xe6 / 3 / 2, SDL_ALPHA_OPAQUE / 2};
+static const SDL_Color current_line_background_color = {0x20, 0x20, 0x20, 0x80};
 static const SDL_Color line_number_color = {0xe6 / 2, 0xe6 / 2, 0xe6 / 2, SDL_ALPHA_OPAQUE};
 static const SDL_Color line_number_dimmed_color = {0xe6 / 4, 0xe6 / 4, 0xe6 / 4, SDL_ALPHA_OPAQUE};
 static const SDL_Color search_background_color = {0x63, 0x63, 0x24, SDL_ALPHA_OPAQUE};
@@ -1035,8 +1036,26 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 				search_cursor += ctx->frames[draw_frame->search_frame].buffer->text_size;
 			}
 		}
+		if (line.text - text <= draw_frame->cursor &&
+			((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->cursor))) {
+			set_color(ctx, current_line_background_color);
+			SDL_RenderFillRect(ctx->renderer, &line_bounds);
+		}
 		Sint32 hscroll = SDL_floor(draw_frame->scroll.x / ctx->font_width);
 		render_line(ctx, line_bounds, SDL_max(0, (Sint32)line.size - hscroll), line.text + hscroll);
+		if (line.text - text <= draw_frame->selection &&
+			((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->selection))) {
+			SDL_FRect selection_rect = {
+				.x = line_bounds.x + string_to_visual(ctx, SDL_min(line.size, draw_frame->selection - (line.text - text)), line.text) * ctx->font_width - draw_frame->scroll.x,
+				.y = line_bounds.y,
+				.w = ctx->font_width,
+				.h = ctx->line_height,
+			};
+			if (selection_rect.x < line_bounds.x + line_bounds.w) {
+				set_color(ctx, selection_rect_color);
+				SDL_RenderRect(ctx->renderer, &selection_rect);
+			}
+		}
 		if (line.text - text <= draw_frame->cursor &&
 			((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->cursor))) {
 			SDL_FPoint actual_cursor_pos = {
@@ -1085,19 +1104,6 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 				SDL_RenderFillRect(ctx->renderer, &cursor_rect);
 			} else {
 				SDL_RenderRect(ctx->renderer, &cursor_rect);
-			}
-		}
-		if (line.text - text <= draw_frame->selection &&
-			((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->selection))) {
-			SDL_FRect selection_rect = {
-				.x = line_bounds.x + string_to_visual(ctx, SDL_min(line.size, draw_frame->selection - (line.text - text)), line.text) * ctx->font_width - draw_frame->scroll.x,
-				.y = line_bounds.y,
-				.w = ctx->font_width,
-				.h = ctx->font_size,
-			};
-			if (selection_rect.x < line_bounds.x + line_bounds.w) {
-				set_color(ctx, selection_rect_color);
-				SDL_RenderRect(ctx->renderer, &selection_rect);
 			}
 		}
 	}
