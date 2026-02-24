@@ -547,10 +547,12 @@ static inline int draw_text(Ctx *ctx, float x, float y, SDL_Color color, size_t 
 		.w = texture->w,
 		.h = texture->h,
 	};
+#if 0
 #ifdef DEBUG
 	set_color_tinted(ctx, (SDL_Color[]){debug_red, debug_green, debug_blue}[ctx->draw_text_back_color], 0.4);
 	SDL_RenderFillRect(ctx->renderer, &draw_pos);
 	ctx->draw_text_back_color = (ctx->draw_text_back_color + 1) % 3;
+#endif
 #endif
 	SDL_RenderTexture(ctx->renderer, texture, NULL, &draw_pos);
 	int res = texture->w;
@@ -1508,6 +1510,8 @@ static void log_handler(void *userdata, int category, SDL_LogPriority priority, 
 	(void) category;
 	(void) priority;
 	Ctx *ctx = (Ctx *)userdata;
+	if (ctx->log_buffer == NULL) return;
+	if (ctx->log_buffer->refcount <= 0) return;
 	buffer_insert_text_no_undo(ctx, ctx->log_buffer, message, SDL_strlen(message), ctx->log_buffer->text_size);
 	buffer_insert_text_no_undo(ctx, ctx->log_buffer, "\n", 1, ctx->log_buffer->text_size);
 }
@@ -1737,7 +1741,6 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 		ctx->frames[main_frame].filename = SDL_strdup(argv[1]);
 		ctx->frames[main_frame].scroll_lock = true;
 	}
-#if 0
 #ifndef DEBUG_DISABLE_LOG_BUFFER
 	ctx->log_buffer = allocate_buffer(ctx, "logs");
 	if (ctx->log_buffer == NULL) {
@@ -1749,7 +1752,6 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	if (log_frame == (Uint32)-1) {
 		SDL_LogError(0, "Can't create log frame");
 	}
-#endif
 #endif
 	Uint64 window_flags = SDL_WINDOW_RESIZABLE;
 	if (!SDL_CreateWindowAndRenderer("editor", ctx->win_w, ctx->win_h, window_flags, &ctx->window, &ctx->renderer)) {
