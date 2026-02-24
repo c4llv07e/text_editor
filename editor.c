@@ -942,6 +942,29 @@ static Uint32 split_into_vis_lines(Ctx *ctx, SDL_FRect bounds, String line, Uint
 	return linenum;
 }
 
+static Uint32 count_vis_lines(Ctx *ctx, SDL_FRect bounds, String line) {
+	if (line.text == NULL || line.size <= 0) {
+		return 1;
+	}
+	float cur_line_width = 0;
+	Uint32 linenum = 1;
+	while (true) {
+		Uint32 cp = SDL_StepUTF8((const char **)&line.text, &line.size);
+		if (cp == 0) break;
+		if (cp == '\t') {
+			cur_line_width += TAB_WIDTH * ctx->font_width;
+		} else {
+			cur_line_width += ctx->font_width;
+		}
+		if (cur_line_width >= bounds.w) {
+			if (line.size <= 0) break;
+			linenum += 1;
+			cur_line_width = 0;
+		}
+	}
+	return linenum;
+}
+
 static void render_line(Ctx *ctx, SDL_FRect bounds, SDL_FPoint *start, size_t text_size, const char text[text_size]) {
 	size_t accum = 0;
 	if (text_size == 0) {
@@ -1184,14 +1207,19 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	}
 	if (frame_has_line_numbers(ctx, frame)) {
 		SDL_Color current_color = line_number_color;
-		for (Uint32 linenum = line_start; (linenum - line_start) * ctx->line_height <= lines_numbers_bounds.h; ++linenum) {
+		SDL_FPoint linenum_draw_pos = {lines_numbers_bounds.x, lines_numbers_bounds.y};
+		for (Uint32 linenum = line_start; linenum_draw_pos.y <= lines_numbers_bounds.y + lines_numbers_bounds.h; ++linenum) {
 #ifdef LINE_NUMS_DIM_SPACE
 			if (linenum > lines_count + line_start || lines[linenum].size <= 0) current_color = line_number_dimmed_color;
 			else current_color = line_number_color;
 #else
 			if (linenum == lines_count + line_start) current_color = line_number_dimmed_color;
 #endif
-			draw_text_fmt(ctx, lines_numbers_bounds.x, lines_numbers_bounds.y + (linenum - line_start) * ctx->line_height + SDL_fmod(SDL_min(0, draw_frame->scroll_interp.y), ctx->line_height), current_color, "%u", linenum);
+			draw_text_fmt(ctx, linenum_draw_pos.x, linenum_draw_pos.y, current_color, "%u", linenum);
+			Uint32 vislines_count = 1;
+			if (linenum < lines_count)
+				vislines_count = count_vis_lines(ctx, lines_bounds, lines[linenum]);
+			linenum_draw_pos.y += vislines_count * ctx->line_height;
 		}
 	}
 #ifdef DEBUG_UNDO
