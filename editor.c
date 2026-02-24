@@ -1036,10 +1036,12 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			float prefix_width = prefix_size * ctx->font_width;
 			draw_text(ctx, start.x - prefix_width, start.y, prefix_color, prefix_size, draw_frame->line_prefix);
 		}
-		SDL_Log("%u", vislines_count);
 		for (Uint32 vislinenum = 0; vislinenum < vislines_count; ++vislinenum) {
 			String visline = vislines[vislinenum];
 			if (start.y + ctx->line_height > lines_bounds.y + lines_bounds.h + 4) break;
+			if (visline.size == 0) {
+				visline.text = line.text; // duct tape to make pointer math work
+			}
 			if (draw_frame->active_selection) {
 				set_color(ctx, selection_color);
 				if ((visline.text + visline.size >= draw_frame->buffer->text + selection_min && visline.text <= draw_frame->buffer->text + selection_min) &&
@@ -1115,11 +1117,10 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			Sint32 hscroll = SDL_floor(draw_frame->scroll.x / ctx->font_width);
 			SDL_FPoint line_start = start;
 			render_line(ctx, lines_bounds, &start, SDL_max(0, (Sint32)visline.size - hscroll), visline.text);
-			if (visline.text - text <= draw_frame->selection &&
-				((vislinenum + 1 >= vislines_count) || (vislines[vislinenum + 1].text - text > draw_frame->selection))) {
+			if (((visline.text - text <= draw_frame->selection) && (visline.text - text + visline.size >= draw_frame->selection))) {
 				SDL_FRect selection_rect = {
-					.x = start.x + string_to_visual(ctx, SDL_min(visline.size, draw_frame->selection - (visline.text - text)), visline.text) * ctx->font_width - draw_frame->scroll.x,
-					.y = start.y,
+					.x = line_start.x + string_to_visual(ctx, SDL_min(visline.size, draw_frame->selection - (visline.text - text)), visline.text) * ctx->font_width - draw_frame->scroll.x,
+					.y = line_start.y,
 					.w = ctx->font_width,
 					.h = ctx->line_height,
 				};
@@ -1128,13 +1129,14 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 					SDL_RenderRect(ctx->renderer, &selection_rect);
 				}
 			} // end of selection cursor
-			if (visline.text - text <= draw_frame->cursor &&
-				((vislinenum + 1 >= vislines_count) || (vislines[vislinenum + 1].text - text > draw_frame->cursor))) {
+			if (((visline.text - text <= draw_frame->cursor) && (visline.text - text + visline.size >= draw_frame->cursor))) {
 				Uint32 visual_x = string_to_visual(ctx, SDL_min(visline.size, draw_frame->cursor - (visline.text - text)), visline.text) * ctx->font_width - draw_frame->scroll.x;
 				SDL_FPoint actual_cursor_pos = {
 					.x = line_start.x + SDL_fmod(visual_x, lines_bounds.w),
 					.y = line_start.y + SDL_floor(visual_x / lines_bounds.w) * ctx->line_height,
 				};
+				set_color_tinted(ctx, debug_red, 0.6);
+				SDL_RenderRect(ctx->renderer, &(SDL_FRect){actual_cursor_pos.x, actual_cursor_pos.y, ctx->font_width, ctx->line_height});
 				float speed = 30;
 				Uint32 width = 2;
 				if (ctx->focused_frame == frame &&
@@ -1722,7 +1724,11 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 			SDL_LogInfo(0, "Opening first file %s", filepath);
 		}
 	}
+#ifndef DEBUG_DISABLE_LOG_BUFFER
 	Uint32 main_frame = append_frame(ctx, buffer, (SDL_FRect){0, 0, ctx->win_w / 2, ctx->win_h});
+#else
+	Uint32 main_frame = append_frame(ctx, buffer, (SDL_FRect){0, 0, ctx->win_w, ctx->win_h});
+#endif
 	if (main_frame == (Uint32)-1) {
 		SDL_Log("Error, can't create first frame");
 		return SDL_APP_FAILURE;
@@ -1731,6 +1737,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 		ctx->frames[main_frame].filename = SDL_strdup(argv[1]);
 		ctx->frames[main_frame].scroll_lock = true;
 	}
+#if 0
+#ifndef DEBUG_DISABLE_LOG_BUFFER
 	ctx->log_buffer = allocate_buffer(ctx, "logs");
 	if (ctx->log_buffer == NULL) {
 		SDL_LogError(0, "Can't create buffer for logs");
@@ -1741,6 +1749,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	if (log_frame == (Uint32)-1) {
 		SDL_LogError(0, "Can't create log frame");
 	}
+#endif
+#endif
 	Uint64 window_flags = SDL_WINDOW_RESIZABLE;
 	if (!SDL_CreateWindowAndRenderer("editor", ctx->win_w, ctx->win_h, window_flags, &ctx->window, &ctx->renderer)) {
 		SDL_Log("Error, can't init renderer: %s", SDL_GetError());
@@ -1773,7 +1783,9 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	ctx->perf_freq = (double)SDL_GetPerformanceFrequency();
 	ctx->last_render = SDL_GetPerformanceCounter();
 	ctx->should_render = true;
-	// SDL_SetLogOutputFunction(log_handler, ctx);
+#ifndef DEBUG_DISABLE_LOG_BUFFER
+	SDL_SetLogOutputFunction(log_handler, ctx);
+#endif
 	return SDL_APP_CONTINUE;
 }
 
