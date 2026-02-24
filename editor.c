@@ -13,6 +13,16 @@
 		- rectangular selection doesn't work.
 */
 
+#define DEFINE_GDB_SCRIPT(script_name) \
+  asm("\
+.pushsection \".debug_gdb_scripts\", \"MS\",@progbits,1\n\
+.byte 1\n\
+.asciz \"" script_name "\"\n\
+.popsection \n\
+");
+
+DEFINE_GDB_SCRIPT("gdb.py")
+
 #define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
