@@ -1044,6 +1044,16 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			if (visline.size == 0) {
 				visline.text = line.text; // duct tape to make pointer math work
 			}
+			if (((visline.text - text <= draw_frame->cursor) && (visline.text - text + visline.size >= draw_frame->cursor))) {
+				set_color(ctx, current_line_background_color);
+				SDL_FRect current_line_bounds = {
+					.x = start.x,
+					.y = start.y,
+					.w = lines_bounds.w,
+					.h = ctx->line_height,
+				};
+				SDL_RenderFillRect(ctx->renderer, &current_line_bounds);
+			} // end of current line highlight
 			if (draw_frame->active_selection) {
 				set_color(ctx, selection_color);
 				if ((visline.text + visline.size >= draw_frame->buffer->text + selection_min && visline.text <= draw_frame->buffer->text + selection_min) &&
@@ -1076,7 +1086,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 						.h = ctx->line_height,
 					};
 					SDL_RenderFillRect(ctx->renderer, &selection_intermediate_rect);
-				} else if (line.text + line.size >= draw_frame->buffer->text + selection_max && line.text <= draw_frame->buffer->text + selection_max) {
+				} else if (visline.text + visline.size >= draw_frame->buffer->text + selection_max && visline.text <= draw_frame->buffer->text + selection_max) {
 					SDL_FRect selection_max_rect = {
 						.x = start.x,
 						.y = start.y,
@@ -1105,17 +1115,6 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 					search_cursor += ctx->frames[draw_frame->search_frame].buffer->text_size;
 				}
 			} // end of searching mode
-			if (visline.text - text <= draw_frame->cursor &&
-				((vislinenum + 1 >= vislines_count) || (vislines[vislinenum + 1].text - text > draw_frame->cursor))) {
-				set_color(ctx, current_line_background_color);
-				SDL_FRect current_line_bounds = {
-					.x = start.x,
-					.y = start.y,
-					.w = lines_bounds.w,
-					.h = ctx->line_height,
-				};
-				SDL_RenderFillRect(ctx->renderer, &current_line_bounds);
-			} // end of current line highlight
 			Sint32 hscroll = SDL_floor(draw_frame->scroll.x / ctx->font_width);
 			SDL_FPoint line_start = start;
 			render_line(ctx, lines_bounds, &start, SDL_max(0, (Sint32)visline.size - hscroll), visline.text);
@@ -1137,8 +1136,6 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 					.x = line_start.x + SDL_fmod(visual_x, lines_bounds.w),
 					.y = line_start.y + SDL_floor(visual_x / lines_bounds.w) * ctx->line_height,
 				};
-				set_color_tinted(ctx, debug_red, 0.6);
-				SDL_RenderRect(ctx->renderer, &(SDL_FRect){actual_cursor_pos.x, actual_cursor_pos.y, ctx->font_width, ctx->line_height});
 				float speed = 30;
 				Uint32 width = 2;
 				if (ctx->focused_frame == frame &&
