@@ -903,50 +903,41 @@ static void frame_next_line(Ctx *ctx, Uint32 frame) {
 	frame_cursor_moved(ctx, frame);
 }
 
-static Uint32 split_into_vis_lines(Ctx *ctx, Uint32 framei, Sint32 lines_count, String lines[lines_count]) {
-	Uint32 max_line = 0;
-	SDL_assert(lines_count >= 0);
-	if (lines_count == 0) return 0;
-	Frame *frame = &ctx->frames[framei];
+static Uint32 split_into_vis_lines(Ctx *ctx, SDL_FRect bounds, String line, Uint32 vislines_count, String vislines[vislines_count]) {
 	// TODO(c4llv07e): Make it use TTF_MeasureString
-	for (Sint32 linenum = lines_count - 1; linenum >= 0; --linenum) {
-		String *line = &lines[linenum];
-		if (line->text == NULL) continue;
-		max_line += 1;
-		String new_line = *line;
-		float cur_line_width = 0.0;
-		Sint32 next_line_num = linenum + 1;
-		while (true) {
-			// "" = 0
-			// "aoeu" = 1
-			// "aoeua" = 2
-			// "aoeu\nao\naons" = 3
-			if (new_line.size <= 0) break;
-			Uint32 cp = SDL_StepUTF8((const char **)&new_line.text, &new_line.size);
-			if (cp == 0) break;
-			if (cp == '\t') {
-				cur_line_width += TAB_WIDTH * ctx->font_width;
-			} else {
-				cur_line_width += ctx->font_width;
-			}
-			if (cur_line_width >= frame->bounds.w) {
-				// line      [][][][][][]|[][][]
-				// next_line [][][][]    new_line
-				line->size -= new_line.size;
-				cur_line_width = 0;
-				if (next_line_num >= lines_count) break;
-				if (new_line.size > 0) {
-					SDL_memmove(lines + next_line_num + 1, lines + next_line_num, lines_count - next_line_num - 1);
-					line = &lines[next_line_num];
-					line->text = new_line.text;
-					line->size = new_line.size;
-					max_line += 1;
-				}
-				next_line_num += 1;
-			}
+	if (line.text == NULL || line.size <= 0) {
+		if (vislines_count > 0) {
+			vislines[0] = (String){0};
+			return 1;
+		}
+		return 0;
+	}
+	if (vislines_count <= 0) return 0;
+	char *text = line.text;
+	size_t size = line.size;
+	float cur_line_width = 0;
+	Uint32 linenum = 1;
+	vislines[0].text = line.text;
+	vislines[0].size = line.size;
+	while (true) {
+		Uint32 cp = SDL_StepUTF8((const char **)&text, &size);
+		if (cp == 0) break;
+		if (cp == '\t') {
+			cur_line_width += TAB_WIDTH * ctx->font_width;
+		} else {
+			cur_line_width += ctx->font_width;
+		}
+		if (cur_line_width >= bounds.w) {
+			vislines[linenum - 1].size -= size;
+			if (linenum >= vislines_count) break;
+			if (size <= 0) break;
+			vislines[linenum].text = text;
+			vislines[linenum].size = size;
+			linenum += 1;
+			cur_line_width = 0;
 		}
 	}
-	return max_line;
+	return linenum;
 }
 
 static void render_line(Ctx *ctx, SDL_FRect bounds, SDL_FPoint *start, size_t text_size, const char text[text_size]) {
@@ -957,14 +948,7 @@ static void render_line(Ctx *ctx, SDL_FRect bounds, SDL_FPoint *start, size_t te
 		return;
 	}
 	while (text_size > 0 && accum < text_size) {
-		if (start->x + (accum + 1) * ctx->font_width >= bounds.x + bounds.w) {
-			draw_text(ctx, start->x, start->y, text_color, accum, text);
-			start->x = bounds.x;
-			start->y += ctx->line_height;
-			text += accum;
-			text_size -= accum;
-			accum = 0;
-		} else if (text[accum] == '\t') {
+		if (text[accum] == '\t') {
 			if (accum != 0) {
 				int offset = draw_text(ctx, start->x, start->y, text_color, accum, text);
 				start->x += offset;
@@ -1007,6 +991,7 @@ static void render_line(Ctx *ctx, SDL_FRect bounds, SDL_FPoint *start, size_t te
 
 static void render_frame(Ctx *ctx, Uint32 frame) {
 	String lines[0x100];
+	String vislines[0x10] = {0};
 	Frame *draw_frame = &ctx->frames[frame];
 #ifdef DEBUG
 	ctx->draw_text_back_color = 0;
@@ -1044,157 +1029,156 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	Uint32 selection_max = SDL_max(draw_frame->cursor, draw_frame->selection);
 	SDL_FPoint start = {lines_bounds.x, lines_bounds.y + SDL_fmod(SDL_min(0, draw_frame->scroll_interp.y), ctx->line_height)};
 	for (Uint32 linenum = 0; linenum < lines_count; ++linenum) {
-		SDL_FRect line_bounds = {
-			.x = lines_bounds.x,
-			.y = lines_bounds.y + linenum * ctx->line_height + SDL_fmod(SDL_min(0, draw_frame->scroll_interp.y), ctx->line_height),
-			.w = lines_bounds.w,
-			.h = ctx->line_height,
-		};
-		if (start.y + 2 < lines_bounds.y) continue;
-		if (start.y + ctx->line_height > lines_bounds.y + lines_bounds.h + 4) break;
 		String line = lines[linenum];
-		// TODO(c4llv07e): Do something like vlines = get_visual_lines(ctx, line); for vline in vlines: draw_vline(ctx, vline)
+		Uint32 vislines_count = split_into_vis_lines(ctx, lines_bounds, line, SDL_arraysize(vislines), vislines);
 		if (draw_frame->line_prefix != NULL) {
 			Uint32 prefix_size = SDL_utf8strlen(draw_frame->line_prefix);
 			float prefix_width = prefix_size * ctx->font_width;
 			draw_text(ctx, start.x - prefix_width, start.y, prefix_color, prefix_size, draw_frame->line_prefix);
 		}
-		if (draw_frame->active_selection) {
-			set_color(ctx, selection_color);
-			if ((line.text + line.size >= draw_frame->buffer->text + selection_min && line.text <= draw_frame->buffer->text + selection_min) &&
-				(line.text + line.size >= draw_frame->buffer->text + selection_max && line.text <= draw_frame->buffer->text + selection_max)) {
-				SDL_FRect selection_oneline_rect = {
-					.x = start.x + string_to_visual(ctx, SDL_min(line.size, selection_min - (line.text - text)), line.text) * ctx->font_width,
-					.y = start.y,
-					.h = line_bounds.h,
-				};
-				selection_oneline_rect.w = SDL_min((string_to_visual(ctx, SDL_min(line.size, selection_max - (line.text - text)), line.text) * ctx->font_width) - selection_oneline_rect.x + start.x,
-					line_bounds.w - selection_oneline_rect.x + start.x);
-				if (selection_oneline_rect.x < start.x + line_bounds.w) {
-					SDL_RenderFillRect(ctx->renderer, &selection_oneline_rect);
+		SDL_Log("%u", vislines_count);
+		for (Uint32 vislinenum = 0; vislinenum < vislines_count; ++vislinenum) {
+			String visline = vislines[vislinenum];
+			if (start.y + ctx->line_height > lines_bounds.y + lines_bounds.h + 4) break;
+			if (draw_frame->active_selection) {
+				set_color(ctx, selection_color);
+				if ((visline.text + visline.size >= draw_frame->buffer->text + selection_min && visline.text <= draw_frame->buffer->text + selection_min) &&
+					(visline.text + visline.size >= draw_frame->buffer->text + selection_max && visline.text <= draw_frame->buffer->text + selection_max)) {
+					SDL_FRect selection_oneline_rect = {
+						.x = start.x + string_to_visual(ctx, SDL_min(visline.size, selection_min - (visline.text - text)), visline.text) * ctx->font_width,
+						.y = start.y,
+						.h = ctx->line_height,
+					};
+					selection_oneline_rect.w =
+						SDL_min((string_to_visual(ctx, SDL_min(visline.size, selection_max - (visline.text - text)), visline.text) * ctx->font_width)
+							- selection_oneline_rect.x + start.x,
+							lines_bounds.w - selection_oneline_rect.x + start.x);
+					if (selection_oneline_rect.x < start.x + lines_bounds.w) {
+						SDL_RenderFillRect(ctx->renderer, &selection_oneline_rect);
+					}
+				} else if (visline.text + visline.size >= draw_frame->buffer->text + selection_min && visline.text <= draw_frame->buffer->text + selection_min) {
+					SDL_FRect selection_min_rect = {
+						.x = start.x + string_to_visual(ctx, SDL_min(visline.size, selection_min - (visline.text - text)), visline.text) * ctx->font_width,
+						.y = start.y,
+						.h = ctx->line_height,
+					};
+					selection_min_rect.w = lines_bounds.w - selection_min_rect.x + start.x;
+					SDL_RenderFillRect(ctx->renderer, &selection_min_rect);
+				} else if (visline.text >= draw_frame->buffer->text + selection_min && visline.text + visline.size <= draw_frame->buffer->text + selection_max) {
+					SDL_FRect selection_intermediate_rect = {
+						.x = start.x,
+						.y = start.y,
+						.w = lines_bounds.w,
+						.h = ctx->line_height,
+					};
+					SDL_RenderFillRect(ctx->renderer, &selection_intermediate_rect);
+				} else if (line.text + line.size >= draw_frame->buffer->text + selection_max && line.text <= draw_frame->buffer->text + selection_max) {
+					SDL_FRect selection_max_rect = {
+						.x = start.x,
+						.y = start.y,
+						.w = SDL_min(string_to_visual(ctx, SDL_min(visline.size, selection_max - (visline.text - text)), visline.text) * ctx->font_width, lines_bounds.w),
+						.h = ctx->line_height,
+					};
+					SDL_RenderFillRect(ctx->renderer, &selection_max_rect);
 				}
-			} else if (line.text + line.size >= draw_frame->buffer->text + selection_min && line.text <= draw_frame->buffer->text + selection_min) {
-				SDL_FRect selection_min_rect = {
-					.x = start.x + string_to_visual(ctx, SDL_min(line.size, selection_min - (line.text - text)), line.text) * ctx->font_width,
-					.y = start.y,
-					.h = line_bounds.h,
-				};
-				selection_min_rect.w = line_bounds.w - selection_min_rect.x + start.x;
-				SDL_RenderFillRect(ctx->renderer, &selection_min_rect);
-			} else if (line.text >= draw_frame->buffer->text + selection_min && line.text + line.size <= draw_frame->buffer->text + selection_max) {
-				SDL_FRect selection_intermediate_rect = {
+			} // end of active selection
+			if (draw_frame->searching_mode && ctx->frames[draw_frame->search_frame].buffer->text_size > 0) {
+				const char *search_cursor = visline.text;
+				set_color(ctx, search_background_color);
+				while (true) {
+					search_cursor = SDL_strnstr(search_cursor, ctx->frames[draw_frame->search_frame].buffer->text, visline.text + visline.size - search_cursor);
+					if (search_cursor == NULL) break;
+					SDL_FRect search_hi_rect = {
+						.x = start.x + string_to_visual(ctx, search_cursor - visline.text, visline.text) * ctx->font_width,
+						.y = start.y,
+						.w = ctx->frames[draw_frame->search_frame].buffer->text_size * ctx->font_width,
+						.h = ctx->line_height,
+					};
+					search_hi_rect.w = SDL_min(search_hi_rect.w, lines_bounds.w - search_hi_rect.x + start.x);
+					if (search_hi_rect.x < start.x + lines_bounds.w) {
+						SDL_RenderFillRect(ctx->renderer, &search_hi_rect);
+					}
+					search_cursor += ctx->frames[draw_frame->search_frame].buffer->text_size;
+				}
+			} // end of searching mode
+			if (visline.text - text <= draw_frame->cursor &&
+				((vislinenum + 1 >= vislines_count) || (vislines[vislinenum + 1].text - text > draw_frame->cursor))) {
+				set_color(ctx, current_line_background_color);
+				SDL_FRect current_line_bounds = {
 					.x = start.x,
 					.y = start.y,
-					.w = line_bounds.w,
-					.h = line_bounds.h,
+					.w = lines_bounds.w,
+					.h = ctx->line_height,
 				};
-				SDL_RenderFillRect(ctx->renderer, &selection_intermediate_rect);
-			} else if (line.text + line.size >= draw_frame->buffer->text + selection_max && line.text <= draw_frame->buffer->text + selection_max) {
-				SDL_FRect selection_max_rect = {
-					.x = start.x,
+				SDL_RenderFillRect(ctx->renderer, &current_line_bounds);
+			} // end of current line highlight
+			Sint32 hscroll = SDL_floor(draw_frame->scroll.x / ctx->font_width);
+			SDL_FPoint line_start = start;
+			render_line(ctx, lines_bounds, &start, SDL_max(0, (Sint32)visline.size - hscroll), visline.text);
+			if (visline.text - text <= draw_frame->selection &&
+				((vislinenum + 1 >= vislines_count) || (vislines[vislinenum + 1].text - text > draw_frame->selection))) {
+				SDL_FRect selection_rect = {
+					.x = start.x + string_to_visual(ctx, SDL_min(visline.size, draw_frame->selection - (visline.text - text)), visline.text) * ctx->font_width - draw_frame->scroll.x,
 					.y = start.y,
-					.w = SDL_min(string_to_visual(ctx, SDL_min(line.size, selection_max - (line.text - text)), line.text) * ctx->font_width, line_bounds.w),
-					.h = line_bounds.h,
+					.w = ctx->font_width,
+					.h = ctx->line_height,
 				};
-				SDL_RenderFillRect(ctx->renderer, &selection_max_rect);
-			}
-		}
-		if (draw_frame->searching_mode && ctx->frames[draw_frame->search_frame].buffer->text_size > 0) {
-			const char *search_cursor = line.text;
-			set_color(ctx, search_background_color);
-			while (true) {
-				search_cursor = SDL_strnstr(search_cursor, ctx->frames[draw_frame->search_frame].buffer->text, line.text + line.size - search_cursor);
-				if (search_cursor == NULL) break;
-				SDL_FRect search_hi_rect = {
-					.x = start.x + string_to_visual(ctx, search_cursor - line.text, line.text) * ctx->font_width,
-					.y = start.y,
-					.w = ctx->frames[draw_frame->search_frame].buffer->text_size * ctx->font_width,
-					.h = line_bounds.h,
-				};
-				search_hi_rect.w = SDL_min(search_hi_rect.w, line_bounds.w - search_hi_rect.x + start.x);
-				if (search_hi_rect.x < start.x + line_bounds.w) {
-					SDL_RenderFillRect(ctx->renderer, &search_hi_rect);
+				if (selection_rect.x < start.x + lines_bounds.w) {
+					set_color(ctx, selection_rect_color);
+					SDL_RenderRect(ctx->renderer, &selection_rect);
 				}
-				search_cursor += ctx->frames[draw_frame->search_frame].buffer->text_size;
-			}
-		}
-		if (line.text - text <= draw_frame->cursor &&
-			((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->cursor))) {
-			set_color(ctx, current_line_background_color);
-			SDL_FRect current_line_bounds = {
-				.x = start.x,
-				.y = start.y,
-				.w = line_bounds.w,
-				.h = ctx->line_height,
-			};
-			SDL_RenderFillRect(ctx->renderer, &current_line_bounds);
-		}
-		Sint32 hscroll = SDL_floor(draw_frame->scroll.x / ctx->font_width);
-		SDL_FPoint line_start = start;
-		render_line(ctx, line_bounds, &start, SDL_max(0, (Sint32)line.size - hscroll), line.text);
-		if (line.text - text <= draw_frame->selection &&
-			((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->selection))) {
-			SDL_FRect selection_rect = {
-				.x = start.x + string_to_visual(ctx, SDL_min(line.size, draw_frame->selection - (line.text - text)), line.text) * ctx->font_width - draw_frame->scroll.x,
-				.y = start.y,
-				.w = ctx->font_width,
-				.h = ctx->line_height,
-			};
-			if (selection_rect.x < start.x + line_bounds.w) {
-				set_color(ctx, selection_rect_color);
-				SDL_RenderRect(ctx->renderer, &selection_rect);
-			}
-		}
-		if (line.text - text <= draw_frame->cursor &&
-			((linenum + 1 >= lines_count) || (lines[linenum + 1].text - text > draw_frame->cursor))) {
-			Uint32 visual_x = string_to_visual(ctx, SDL_min(line.size, draw_frame->cursor - (line.text - text)), line.text) * ctx->font_width - draw_frame->scroll.x;
-			SDL_FPoint actual_cursor_pos = {
-				.x = line_start.x + SDL_fmod(visual_x, line_bounds.w),
-				.y = line_start.y + SDL_floor(visual_x / line_bounds.w) * ctx->line_height,
-			};
-			float speed = 30;
-			Uint32 width = 2;
-			if (ctx->focused_frame == frame &&
-				(((SDL_fabs(actual_cursor_pos.x - ctx->active_cursor_pos.x) >= 0.01) ||
-				  (SDL_fabs(actual_cursor_pos.y - ctx->active_cursor_pos.y) >= 0.01)))) {
-				width = SDL_max(width, SDL_log(SDL_abs(ctx->active_cursor_pos.x - lerp(ctx->active_cursor_pos.x, actual_cursor_pos.x, speed * ctx->deltatime))) * 2);
-				ctx->active_cursor_pos.x = lerp(ctx->active_cursor_pos.x, actual_cursor_pos.x, SDL_min(1, speed * ctx->deltatime));
-				ctx->active_cursor_pos.y = lerp(ctx->active_cursor_pos.y, actual_cursor_pos.y, SDL_min(1, speed * ctx->deltatime));
-				ctx->should_render = true;
-			}
-			SDL_FRect cursor_rect = {
-				.x = actual_cursor_pos.x,
-				.y = actual_cursor_pos.y,
-				.w = ctx->font_width,
-				.h = ctx->line_height,
-			};
-			if (ctx->focused_frame == frame) {
-				cursor_rect.x = ctx->active_cursor_pos.x;
-				cursor_rect.y = ctx->active_cursor_pos.y;
-				cursor_rect.w = width;
-			}
-			if (ctx->frames[frame].frame_type != Frame_Type_ask) {
-				SDL_GetRectIntersectionFloat(&bounds, &cursor_rect, &cursor_rect);
-			}
-			cursor_rect.w = SDL_max(0, cursor_rect.w);
-			cursor_rect.h = SDL_max(0, cursor_rect.h);
-			set_color(ctx, text_color);
-			if (cursor_rect.x >= bounds.x + bounds.w) {
-				if (ctx->overflow_cursor_texture) {
-					cursor_rect.x = bounds.x + bounds.w - ctx->font_width * 1.5;
-					cursor_rect.w = ctx->font_width;
-					SDL_RenderTexture(ctx->renderer, ctx->overflow_cursor_texture, NULL, &cursor_rect);
-				} else {
-					cursor_rect.x = bounds.x + bounds.w - 12;
-					cursor_rect.w = 12;
-					set_color(ctx, debug_red);
+			} // end of selection cursor
+			if (visline.text - text <= draw_frame->cursor &&
+				((vislinenum + 1 >= vislines_count) || (vislines[vislinenum + 1].text - text > draw_frame->cursor))) {
+				Uint32 visual_x = string_to_visual(ctx, SDL_min(visline.size, draw_frame->cursor - (visline.text - text)), visline.text) * ctx->font_width - draw_frame->scroll.x;
+				SDL_FPoint actual_cursor_pos = {
+					.x = line_start.x + SDL_fmod(visual_x, lines_bounds.w),
+					.y = line_start.y + SDL_floor(visual_x / lines_bounds.w) * ctx->line_height,
+				};
+				float speed = 30;
+				Uint32 width = 2;
+				if (ctx->focused_frame == frame &&
+					(((SDL_fabs(actual_cursor_pos.x - ctx->active_cursor_pos.x) >= 0.01) ||
+					(SDL_fabs(actual_cursor_pos.y - ctx->active_cursor_pos.y) >= 0.01)))) {
+					width = SDL_max(width, SDL_log(SDL_abs(ctx->active_cursor_pos.x - lerp(ctx->active_cursor_pos.x, actual_cursor_pos.x, speed * ctx->deltatime))) * 2);
+					ctx->active_cursor_pos.x = lerp(ctx->active_cursor_pos.x, actual_cursor_pos.x, SDL_min(1, speed * ctx->deltatime));
+					ctx->active_cursor_pos.y = lerp(ctx->active_cursor_pos.y, actual_cursor_pos.y, SDL_min(1, speed * ctx->deltatime));
+					ctx->should_render = true;
+				}
+				SDL_FRect cursor_rect = {
+					.x = actual_cursor_pos.x,
+					.y = actual_cursor_pos.y,
+					.w = ctx->font_width,
+					.h = ctx->line_height,
+				};
+				if (ctx->focused_frame == frame) {
+					cursor_rect.x = ctx->active_cursor_pos.x;
+					cursor_rect.y = ctx->active_cursor_pos.y;
+					cursor_rect.w = width;
+				}
+				if (ctx->frames[frame].frame_type != Frame_Type_ask) {
+					SDL_GetRectIntersectionFloat(&bounds, &cursor_rect, &cursor_rect);
+				}
+				cursor_rect.w = SDL_max(0, cursor_rect.w);
+				cursor_rect.h = SDL_max(0, cursor_rect.h);
+				set_color(ctx, text_color);
+				if (cursor_rect.x >= bounds.x + bounds.w) {
+					if (ctx->overflow_cursor_texture) {
+						cursor_rect.x = bounds.x + bounds.w - ctx->font_width * 1.5;
+						cursor_rect.w = ctx->font_width;
+						SDL_RenderTexture(ctx->renderer, ctx->overflow_cursor_texture, NULL, &cursor_rect);
+					} else {
+						cursor_rect.x = bounds.x + bounds.w - 12;
+						cursor_rect.w = 12;
+						set_color(ctx, debug_red);
+						SDL_RenderFillRect(ctx->renderer, &cursor_rect);
+					}
+				} else if (ctx->focused_frame == frame) {
 					SDL_RenderFillRect(ctx->renderer, &cursor_rect);
+				} else {
+					SDL_RenderRect(ctx->renderer, &cursor_rect);
 				}
-			} else if (ctx->focused_frame == frame) {
-				SDL_RenderFillRect(ctx->renderer, &cursor_rect);
-			} else {
-				SDL_RenderRect(ctx->renderer, &cursor_rect);
-			}
+			} // end of cursor
 		}
 	}
 	if (frame_has_line_numbers(ctx, frame)) {
@@ -1789,7 +1773,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	ctx->perf_freq = (double)SDL_GetPerformanceFrequency();
 	ctx->last_render = SDL_GetPerformanceCounter();
 	ctx->should_render = true;
-	SDL_SetLogOutputFunction(log_handler, ctx);
+	// SDL_SetLogOutputFunction(log_handler, ctx);
 	return SDL_APP_CONTINUE;
 }
 
