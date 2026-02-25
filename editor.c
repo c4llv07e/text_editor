@@ -797,8 +797,8 @@ static void frame_forward_paragraph(Ctx *ctx, Uint32 frame) {
 	if (current_frame->buffer->text_size == 0) return;
 	const char *text = &current_frame->buffer->text[current_frame->cursor];
 	size_t len = current_frame->buffer->text_size - current_frame->cursor;
-	Uint32 prev_cp;
-	Uint32 cp;
+	Uint32 prev_cp = 0;
+	Uint32 cp = 0;
 	while (true) {
 		cp = SDL_StepUTF8(&text, &len);
 		if (cp == 0 || (cp == '\n' && prev_cp == '\n')) break;
@@ -818,8 +818,8 @@ static void frame_backward_paragraph(Ctx *ctx, Uint32 frame) {
 	current_frame->scroll_lock = true;
 	if (current_frame->buffer->text_size == 0) return;
 	const char *text = &current_frame->buffer->text[current_frame->cursor];
-	Uint32 prev_cp;
-	Uint32 cp;
+	Uint32 prev_cp = 0;
+	Uint32 cp = 0;
 	while (true) {
 		cp = SDL_StepBackUTF8(current_frame->buffer->text, &text);
 		if (cp == 0 || (cp == '\n' && prev_cp == '\n')) break;
