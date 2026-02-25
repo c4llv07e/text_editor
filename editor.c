@@ -144,7 +144,9 @@ typedef struct Ctx {
 	Frame *frames;
 	Uint32 *sorted_frames;
 	Uint32 focused_frame;
+#ifdef DEBUG_RENDER_FAN
 	int render_rotate_fan;
+#endif
 	SDL_FPoint transform;
 	SDL_FRect debug_screen_rect;
 	Uint64 last_middle_click;
@@ -1667,6 +1669,7 @@ static void render(Ctx *ctx, bool debug_screen) {
 		draw_text_fmt(ctx, 400, ctx->line_height * i, color, "%" SDL_PRIu32 " %" SDL_PRIu32, i, ctx->sorted_frames[i]);
 	}
 #endif
+#ifdef DEBUG_RENDER_FAN
 	SDL_SetRenderDrawColor(ctx->renderer, 0x22, 0x22, 0x22, 0xff);
 	SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
 		0, 0, 0x10, 0x10,
@@ -1675,6 +1678,7 @@ static void render(Ctx *ctx, bool debug_screen) {
 	SDL_RenderFillRect(ctx->renderer, &(SDL_FRect) {
 		(ctx->render_rotate_fan % 2) * 0x10 / 2, (ctx->render_rotate_fan / 2) * 0x10 / 2, 0x10 / 2, 0x10 / 2,
 	});
+#endif
 #if 0
 	SDL_FRect test_pos = {
 		.x = 10,
@@ -1687,7 +1691,9 @@ static void render(Ctx *ctx, bool debug_screen) {
 	SDL_RenderTexture(ctx->renderer, ctx->tab_texture, NULL, &test_pos);
 #endif
 	SDL_RenderPresent(ctx->renderer);
+#ifdef DEBUG_RENDER_FAN
 	ctx->render_rotate_fan = (ctx->render_rotate_fan + 1) % 4;
+#endif
 }
 
 SDL_AppResult SDL_AppIterate(void *appstate) {
