@@ -23,9 +23,11 @@
 
 DEFINE_GDB_SCRIPT("gdb.py")
 
+#ifndef NO_MAIN
 #define SDL_MAIN_USE_CALLBACKS
-#include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
+#endif
+#include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
 #define TEXT_CHUNK_SIZE 256
@@ -598,14 +600,16 @@ static String get_vis_line(Ctx *ctx, SDL_FRect bounds, size_t text_size, char te
 			linenum -= 1;
 			cur_line_width = 0;
 			continue;
-		} else if (cp == '\t') {
-			cur_line_width += TAB_WIDTH * ctx->font_width;
-		} else {
-			cur_line_width += ctx->font_width;
-		}
+		} else if (cp == '\t') cur_line_width += TAB_WIDTH * ctx->font_width;
+		else cur_line_width += ctx->font_width;
 		if (cur_line_width >= bounds.w) {
-			linenum -= 1;
-			cur_line_width = 0;
+			const char *next_char = begin;
+			size_t next_size = size;
+			Uint32 cp = SDL_StepUTF8((const char **)&next_char, &next_size);
+			if (cp != '\n') {
+				linenum -= 1;
+				cur_line_width = 0;
+			}
 		}
 	}
 	text = begin;
@@ -613,7 +617,6 @@ static String get_vis_line(Ctx *ctx, SDL_FRect bounds, size_t text_size, char te
 	while (true) {
 		Uint32 cp = SDL_StepUTF8((const char **)&text, &size);
 		if (cp == 0) {
-			text -= 1;
 			break;
 		}
 		else if (cp == '\n') {
@@ -1076,6 +1079,13 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		}
 		for (Uint32 vislinenum = 0; vislinenum < vislines_count; ++vislinenum) {
 			String visline = vislines[vislinenum];
+#ifdef DEBUG_VISLINES
+			if (frame_has_line_numbers(ctx, frame)) {
+				if (start.y >= lines_bounds.y && (start.y + ctx->line_height) < lines_bounds.y + lines_bounds.h) {
+					draw_text_fmt(ctx, ctx->font_width * 2 + start.x - (lines_bounds.x - lines_numbers_bounds.x), start.y, debug_red, "%u", vislinenum);
+				}
+			}
+#endif
 			if (start.y < lines_bounds.y) {
 				start.y += ctx->line_height;
 				continue;
@@ -1453,7 +1463,6 @@ static bool handle_frame_mouse_click(Ctx *ctx, Uint32 frame, SDL_FPoint point) {
 	// Don't fucking reallocate sized strings which only point is zero copy.
 	SDL_assert(line.text >= draw_frame->buffer->text && line.text <= draw_frame->buffer->text + draw_frame->buffer->text_size);
 	Uint32 char_ind = coords_to_text_index(ctx, line.size, line.text, point.x - bounds.x);
-	SDL_Log("linesize %lu, line %u, char %u", line.size, linenum, char_ind);
 	draw_frame->cursor = utf8_go_forward(line.size, line.text, char_ind) - draw_frame->buffer->text;
 	return true;
 }
@@ -1711,6 +1720,27 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 	ctx->last_render = current_time;
 	return SDL_APP_CONTINUE;
 }
+
+#ifdef NO_MAIN
+int main(void) {
+	Ctx _ctx;
+	Ctx *ctx = &_ctx;
+	ctx->font_width = 7;
+	SDL_FRect bounds = {.x = 28.00, .y = 230.39, .w = 131.27, .h = 232.04};
+#if 0
+	char *text;
+	size_t text_size;
+	text = SDL_LoadFile(__FILE__, &text_size);
+#else
+	char text[] = "ointer for buffers.\n\nsaoteuh";
+	size_t text_size = SDL_arraysize(text);
+#endif
+	for (Uint32 linenum = 0; linenum < 0x10; ++linenum) {
+		String visline = get_vis_line(ctx, bounds, text_size, text, linenum);
+		SDL_Log("%u: [%lu]|%.*s|", linenum, visline.size, (int)visline.size, visline.text);
+	}
+}
+#endif
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	(void) argc;

@@ -11,13 +11,13 @@
 - Creation of the new frames
 - scroll centered to cursor on most moves
 	- mouse click
-- Fix linenum underflow
 - sequential pressing ctrl-q should repeat last search
 - holding mouse to select text
 - more keybinds
 	- ctrl-d
 	- alt-d
 - simple auto indent
+- fix scroll to line uses logical line, not visual ones
 
 After complete layouting
 - Store layout in project file
