@@ -586,17 +586,44 @@ static inline int draw_text_fmt(Ctx *ctx, float x, float y, SDL_Color color, SDL
 	return ret;
 }
 
-static String get_line(Ctx *ctx, size_t text_size, char text[text_size], Uint32 linenum) {
-	char *begin = text;
-	(void) ctx;
+static String get_vis_line(Ctx *ctx, SDL_FRect bounds, size_t text_size, char text[text_size], Uint32 linenum) {
 	if (text_size == 0) return (String){0};
+	size_t size = text_size;
+	char *begin = text;
+	float cur_line_width = 0;
 	while (linenum != 0) {
-		if (*begin == '\0') return (String){0};
-		if (*begin == '\n') linenum -= 1;
-		begin += 1;
+		Uint32 cp = SDL_StepUTF8((const char **)&begin, &size);
+		if (cp == 0) return (String){0};
+		else if (cp == '\n') {
+			linenum -= 1;
+			cur_line_width = 0;
+			continue;
+		} else if (cp == '\t') {
+			cur_line_width += TAB_WIDTH * ctx->font_width;
+		} else {
+			cur_line_width += ctx->font_width;
+		}
+		if (cur_line_width >= bounds.w) {
+			linenum -= 1;
+			cur_line_width = 0;
+		}
 	}
 	text = begin;
-	while (*text != '\0' && *text != '\n') text += 1;
+	cur_line_width = 0;
+	while (true) {
+		Uint32 cp = SDL_StepUTF8((const char **)&text, &size);
+		if (cp == 0) {
+			text -= 1;
+			break;
+		}
+		else if (cp == '\n') {
+			text -= 1;
+			break;
+		}
+		else if (cp == '\t') cur_line_width += TAB_WIDTH * ctx->font_width;
+		else cur_line_width += ctx->font_width;
+		if (cur_line_width >= bounds.w) break;
+	}
 	return (String){.text = begin, .size = text - begin};
 }
 
@@ -1418,7 +1445,7 @@ static bool handle_frame_mouse_click(Ctx *ctx, Uint32 frame, SDL_FPoint point) {
 		return true;
 	}
 	Uint32 linenum = (point.y - bounds.y - SDL_min(0, draw_frame->scroll_interp.y)) / ctx->line_height;
-	String line = get_line(ctx, draw_frame->buffer->text_size, draw_frame->buffer->text, (Uint32)linenum);
+	String line = get_vis_line(ctx, bounds, draw_frame->buffer->text_size, draw_frame->buffer->text, (Uint32)linenum);
 	if (line.text == NULL) {
 		draw_frame->cursor = draw_frame->buffer->text_size;
 		return true;
@@ -1426,6 +1453,7 @@ static bool handle_frame_mouse_click(Ctx *ctx, Uint32 frame, SDL_FPoint point) {
 	// Don't fucking reallocate sized strings which only point is zero copy.
 	SDL_assert(line.text >= draw_frame->buffer->text && line.text <= draw_frame->buffer->text + draw_frame->buffer->text_size);
 	Uint32 char_ind = coords_to_text_index(ctx, line.size, line.text, point.x - bounds.x);
+	SDL_Log("linesize %lu, line %u, char %u", line.size, linenum, char_ind);
 	draw_frame->cursor = utf8_go_forward(line.size, line.text, char_ind) - draw_frame->buffer->text;
 	return true;
 }
@@ -1510,6 +1538,7 @@ static Uint32 create_ask_frame(Ctx *ctx, Ask_Option option, Uint32 parent, char 
 	return frame;
 }
 
+#ifndef DEBUG_DISABLE_LOG_BUFFER
 static void log_handler(void *userdata, int category, SDL_LogPriority priority, const char *message) {
 	(void) category;
 	(void) priority;
@@ -1519,6 +1548,7 @@ static void log_handler(void *userdata, int category, SDL_LogPriority priority, 
 	buffer_insert_text_no_undo(ctx, ctx->log_buffer, message, SDL_strlen(message), ctx->log_buffer->text_size);
 	buffer_insert_text_no_undo(ctx, ctx->log_buffer, "\n", 1, ctx->log_buffer->text_size);
 }
+#endif
 
 // Returns framei on fail
 static Uint32 frame_search_create(Ctx *ctx, Uint32 framei, bool search_backwards) {
