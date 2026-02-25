@@ -2,8 +2,7 @@
 - Open folders in frame
 - Possible layout like acme
 - Use ttf text engine
-	- word wrapping
-- Use ring buffer undo like in emacs
+- Use ring undo like in emacs
 - Running commands
 - List all buffers and open them
 - Auto complete in open buffer
@@ -17,7 +16,9 @@
 	- ctrl-d
 	- alt-d
 	- alt-shift-< / >
+	- ctrl-k
 - simple auto indent
+- virtual indent for C-like languages (hi 4coder)
 - fix scroll to line uses logical line, not visual ones
 
 After complete layouting
