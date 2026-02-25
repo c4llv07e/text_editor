@@ -168,6 +168,7 @@ static const SDL_Color debug_red __attribute__((unused)) = {0xff, 0x00, 0x00, SD
 static const SDL_Color debug_yellow __attribute__((unused)) = {0xff, 0xff, 0x00, SDL_ALPHA_OPAQUE};
 static const SDL_Color debug_green __attribute__((unused)) = {0x00, 0xff, 0x00, SDL_ALPHA_OPAQUE};
 static const SDL_Color debug_blue __attribute__((unused)) = {0x00, 0x00, 0xff, SDL_ALPHA_OPAQUE};
+static const SDL_Color debug_purple __attribute__((unused)) = {0xff, 0x00, 0xff, SDL_ALPHA_OPAQUE};
 static const SDL_Color debug_black __attribute__((unused)) = {0x00, 0x00, 0x00, SDL_ALPHA_OPAQUE};
 
 static inline SDL_Color hsv_to_rgb(SDL_Color hsv) {
@@ -557,6 +558,10 @@ static inline int draw_text(Ctx *ctx, float x, float y, SDL_Color color, size_t 
 	SDL_RenderTexture(ctx->renderer, texture, NULL, &draw_pos);
 	int res = texture->w;
 	SDL_DestroyTexture(texture);
+#ifdef DEBUG
+	// Invalidate color
+	set_color(ctx, debug_purple);
+#endif
 	return res;
 }
 
@@ -942,29 +947,6 @@ static Uint32 split_into_vis_lines(Ctx *ctx, SDL_FRect bounds, String line, Uint
 	return linenum;
 }
 
-static Uint32 count_vis_lines(Ctx *ctx, SDL_FRect bounds, String line) {
-	if (line.text == NULL || line.size <= 0) {
-		return 1;
-	}
-	float cur_line_width = 0;
-	Uint32 linenum = 1;
-	while (true) {
-		Uint32 cp = SDL_StepUTF8((const char **)&line.text, &line.size);
-		if (cp == 0) break;
-		if (cp == '\t') {
-			cur_line_width += TAB_WIDTH * ctx->font_width;
-		} else {
-			cur_line_width += ctx->font_width;
-		}
-		if (cur_line_width >= bounds.w) {
-			if (line.size <= 0) break;
-			linenum += 1;
-			cur_line_width = 0;
-		}
-	}
-	return linenum;
-}
-
 static void render_line(Ctx *ctx, SDL_FRect bounds, SDL_FPoint *start, size_t text_size, const char text[text_size]) {
 	size_t accum = 0;
 	if (text_size == 0) {
@@ -1048,11 +1030,10 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		ctx->should_render = true;
 	}
 	Uint32 lines_count;
-	Uint32 line_start = SDL_max(0, SDL_floor(-ctx->frames[frame].scroll_interp.y / ctx->line_height));
-	lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, text, line_start);
+	lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, text, 0);
 	Uint32 selection_min = SDL_min(draw_frame->cursor, draw_frame->selection);
 	Uint32 selection_max = SDL_max(draw_frame->cursor, draw_frame->selection);
-	SDL_FPoint start = {lines_bounds.x, lines_bounds.y + SDL_fmod(SDL_min(0, draw_frame->scroll_interp.y), ctx->line_height)};
+	SDL_FPoint start = {lines_bounds.x, lines_bounds.y + SDL_min(0, draw_frame->scroll_interp.y)};
 	for (Uint32 linenum = 0; linenum < lines_count; ++linenum) {
 		String line = lines[linenum];
 		Uint32 vislines_count = split_into_vis_lines(ctx, lines_bounds, line, SDL_arraysize(vislines), vislines);
@@ -1061,8 +1042,17 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			float prefix_width = prefix_size * ctx->font_width;
 			draw_text(ctx, start.x - prefix_width, start.y, prefix_color, prefix_size, draw_frame->line_prefix);
 		}
+		if (frame_has_line_numbers(ctx, frame)) {
+			if (start.y >= lines_bounds.y && (start.y + ctx->line_height) < lines_bounds.y + lines_bounds.h) {
+				draw_text_fmt(ctx, start.x - (lines_bounds.x - lines_numbers_bounds.x), start.y, line_number_color, "%u", linenum);
+			}
+		}
 		for (Uint32 vislinenum = 0; vislinenum < vislines_count; ++vislinenum) {
 			String visline = vislines[vislinenum];
+			if (start.y < lines_bounds.y) {
+				start.y += ctx->line_height;
+				continue;
+			}
 			if (start.y + ctx->line_height > lines_bounds.y + lines_bounds.h + 4) break;
 			if (visline.size == 0) {
 				visline.text = line.text; // duct tape to make pointer math work
@@ -1206,22 +1196,11 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		}
 	}
 	if (frame_has_line_numbers(ctx, frame)) {
-		SDL_Color current_color = line_number_color;
-		SDL_FPoint linenum_draw_pos = {lines_numbers_bounds.x, lines_numbers_bounds.y};
-		for (Uint32 linenum = line_start; linenum_draw_pos.y <= lines_numbers_bounds.y + lines_numbers_bounds.h; ++linenum) {
-#ifdef LINE_NUMS_DIM_SPACE
-			if (linenum > lines_count + line_start || lines[linenum].size <= 0) current_color = line_number_dimmed_color;
-			else current_color = line_number_color;
-#else
-			if (linenum == lines_count + line_start) current_color = line_number_dimmed_color;
-#endif
-			draw_text_fmt(ctx, linenum_draw_pos.x, linenum_draw_pos.y, current_color, "%u", linenum);
-			Uint32 vislines_count = 1;
-			if (linenum < lines_count)
-				vislines_count = count_vis_lines(ctx, lines_bounds, lines[linenum]);
-			linenum_draw_pos.y += vislines_count * ctx->line_height;
+		for (Uint32 linenum = lines_count; (start.y + ctx->line_height) < lines_numbers_bounds.y + lines_numbers_bounds.h; ++linenum) {
+			draw_text_fmt(ctx, start.x - (lines_bounds.x - lines_numbers_bounds.x), start.y, line_number_dimmed_color, "%u", linenum);
+			start.y += ctx->line_height;
 		}
-	}
+	} // end of line numbers
 #ifdef DEBUG_UNDO
 	for (Uint32 i = 0; i < draw_frame->buffer->undos_size; ++i) {
 		Undo_Operation op = draw_frame->buffer->undos[i];
