@@ -2389,5 +2389,4 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
 	SDL_DestroyRenderer(ctx->renderer);
 	SDL_DestroyWindow(ctx->window);
 #endif
-	// TODO(c4llv07e): Deallocate all buffers in debug for valgrind.
 }

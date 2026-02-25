@@ -16,6 +16,7 @@
 - more keybinds
 	- ctrl-d
 	- alt-d
+	- alt-shift-< / >
 - simple auto indent
 - fix scroll to line uses logical line, not visual ones
 
