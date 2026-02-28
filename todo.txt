@@ -10,6 +10,7 @@
 - Creation of the new frames
 - scroll centered to cursor on most moves
 	- mouse click
+- fix lines draw until 255
 - sequential pressing ctrl-q should repeat last search
 - holding mouse to select text
 - more keybinds
@@ -18,6 +19,7 @@
 	- alt-shift-< / >
 	- ctrl-k
 - simple auto indent
+- multiple cursors (hard)
 - virtual indent for C-like languages (hi 4coder)
 - fix scroll to line uses logical line, not visual ones
 

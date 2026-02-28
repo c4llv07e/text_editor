@@ -13,6 +13,7 @@
 		- rectangular selection doesn't work.
 */
 
+#ifdef DEBUG_GDB
 #define DEFINE_GDB_SCRIPT(script_name) \
   asm("\
 .pushsection \".debug_gdb_scripts\", \"MS\",@progbits,1\n\
@@ -20,6 +21,9 @@
 .asciz \"" script_name "\"\n\
 .popsection \n\
 ");
+#else
+#define DEFINE_GDB_SCRIPT(script_name)
+#endif
 
 DEFINE_GDB_SCRIPT("gdb.py")
 
@@ -29,6 +33,10 @@ DEFINE_GDB_SCRIPT("gdb.py")
 #endif
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
+
+extern char _binary_LiberationMono_Regular_ttf_end[];
+extern char _binary_LiberationMono_Regular_ttf_size;
+extern char _binary_LiberationMono_Regular_ttf_start[];
 
 #define TEXT_CHUNK_SIZE 256
 #define TAB_WIDTH 8
@@ -99,6 +107,7 @@ typedef struct Frame {
 	bool searching_mode;
 	Uint32 search_frame;
 	Uint32 search_cursor;
+	String last_search;
 	bool search_backwards;
 	Search_Status search_status;
 	Ask_Option ask_option;
@@ -1065,6 +1074,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, text, 0);
 	Uint32 selection_min = SDL_min(draw_frame->cursor, draw_frame->selection);
 	Uint32 selection_max = SDL_max(draw_frame->cursor, draw_frame->selection);
+	// get_vis_line(scroll / line_height) -> count_lines(until visline.text) -> start = line_count
 	SDL_FPoint start = {lines_bounds.x, lines_bounds.y + SDL_min(0, draw_frame->scroll_interp.y)};
 	for (Uint32 linenum = 0; linenum < lines_count; ++linenum) {
 		String line = lines[linenum];
@@ -1549,7 +1559,7 @@ static Uint32 create_ask_frame(Ctx *ctx, Ask_Option option, Uint32 parent, char 
 	return frame;
 }
 
-#ifndef DEBUG_DISABLE_LOG_BUFFER
+#ifndef DISABLE_LOG_BUFFER
 static void log_handler(void *userdata, int category, SDL_LogPriority priority, const char *message) {
 	(void) category;
 	(void) priority;
@@ -1798,7 +1808,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 			SDL_LogInfo(0, "Opening first file %s", filepath);
 		}
 	}
-#ifndef DEBUG_DISABLE_LOG_BUFFER
+#ifndef DISABLE_LOG_BUFFER
 	Uint32 main_frame = append_frame(ctx, buffer, (SDL_FRect){0, 0, ctx->win_w / 2, ctx->win_h});
 #else
 	Uint32 main_frame = append_frame(ctx, buffer, (SDL_FRect){0, 0, ctx->win_w, ctx->win_h});
@@ -1811,7 +1821,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 		ctx->frames[main_frame].filename = SDL_strdup(argv[1]);
 		ctx->frames[main_frame].scroll_lock = true;
 	}
-#ifndef DEBUG_DISABLE_LOG_BUFFER
+#ifndef DISABLE_LOG_BUFFER
 	ctx->log_buffer = allocate_buffer(ctx, "logs");
 	if (ctx->log_buffer == NULL) {
 		SDL_LogError(0, "Can't create buffer for logs");
@@ -1830,10 +1840,14 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	}
 	ctx->font_size = 12;
 	ctx->line_height = ctx->font_size * 1.2;
-	const char *fontpath = "/usr/share/fonts/TTF/liberation/LiberationMono-Regular.ttf";
-	ctx->font = TTF_OpenFont(fontpath, ctx->font_size);
+	SDL_IOStream *font_stream = SDL_IOFromConstMem(_binary_LiberationMono_Regular_ttf_start, (size_t)&_binary_LiberationMono_Regular_ttf_size);
+	if (font_stream == NULL) {
+		SDL_LogCritical(0, "Can't create iostream for font: %s", SDL_GetError());
+		return SDL_APP_FAILURE;
+	}
+	ctx->font = TTF_OpenFontIO(font_stream, true, ctx->font_size);
 	if (ctx->font == NULL) {
-		SDL_LogCritical(0, "Can't open font \"%s\": %s", fontpath, SDL_GetError());
+		SDL_LogCritical(0, "Can't open font: %s", SDL_GetError());
 		return SDL_APP_FAILURE;
 	}
 	int font_width_int;
@@ -1855,7 +1869,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	ctx->perf_freq = (double)SDL_GetPerformanceFrequency();
 	ctx->last_render = SDL_GetPerformanceCounter();
 	ctx->should_render = true;
-#ifndef DEBUG_DISABLE_LOG_BUFFER
+#ifndef DISABLE_LOG_BUFFER
 	SDL_SetLogOutputFunction(log_handler, ctx);
 #endif
 	return SDL_APP_CONTINUE;
