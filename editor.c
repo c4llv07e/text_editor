@@ -1853,13 +1853,6 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	int font_width_int;
 	TTF_GetGlyphMetrics(ctx->font, 'w', NULL, NULL, NULL, NULL, &font_width_int);
 	ctx->font_width = (float)font_width_int;
-	/*
-	ctx->text_engine = TTF_CreateRendererTextEngine(ctx->renderer);
-	if (ctx->text_engine == NULL) {
-		SDL_LogCritical(0, "Can't create text engine: %s", SDL_GetError());
-		return SDL_APP_FAILURE;
-	}
-	*/
 	generate_overflow_cursor(ctx);
 	generate_tab_texture(ctx);
 	generate_space_texture(ctx);
