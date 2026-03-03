@@ -34,6 +34,12 @@ DEFINE_GDB_SCRIPT("gdb.py")
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
+#ifdef DEBUG_SCROLL_ONELINE
+#define SCROLL_LINES_TICK 1
+#else
+#define SCROLL_LINES_TICK 3
+#endif
+
 extern char _binary_LiberationMono_Regular_ttf_end[];
 extern char _binary_LiberationMono_Regular_ttf_size;
 extern char _binary_LiberationMono_Regular_ttf_start[];
@@ -1065,10 +1071,16 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		bounds.w,
 		bounds.h,
 	});
-	if (SDL_fabs(ctx->frames[frame].scroll_interp.y - ctx->frames[frame].scroll.y) >= 0.01) {
-		float speed = 10;
-		ctx->frames[frame].scroll_interp.y = lerp(ctx->frames[frame].scroll_interp.y, ctx->frames[frame].scroll.y, speed * ctx->deltatime);
+	if (SDL_fabs(ctx->frames[frame].scroll_interp.y - ctx->frames[frame].scroll.y) > 1) {
+		float speed = 5;
+		float current = ctx->frames[frame].scroll_interp.y;
+		float target = ctx->frames[frame].scroll.y;
+		float delta = target - current;
+		ctx->frames[frame].scroll_interp.y += delta * SDL_clamp(SDL_pow(SDL_abs(delta), 0.5) * speed * ctx->deltatime, 0, 1);
 		ctx->should_render = true;
+	} else {
+		// Hate these floating point errors
+		ctx->frames[frame].scroll_interp.y = ctx->frames[frame].scroll.y;
 	}
 	Uint32 lines_count;
 	String offset_line = get_vis_line(ctx, bounds, draw_frame->buffer->text_size, draw_frame->buffer->text, SDL_max(0, -draw_frame->scroll_interp.y / ctx->line_height));
@@ -1077,10 +1089,11 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		linenum_offset = count_lines(ctx, offset_line.text - text, text);
 	else if (offset_line.text == 0)
 		linenum_offset = count_lines(ctx, draw_frame->buffer->text_size, text);
+	if (linenum_offset > 0) linenum_offset -= 1;
 	lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, text, linenum_offset);
 	Uint32 selection_min = SDL_min(draw_frame->cursor, draw_frame->selection);
 	Uint32 selection_max = SDL_max(draw_frame->cursor, draw_frame->selection);
-	SDL_FPoint start = {lines_bounds.x, lines_bounds.y + SDL_fmod(SDL_min(0, draw_frame->scroll_interp.y), ctx->line_height)};
+	SDL_FPoint start = {lines_bounds.x, lines_bounds.y + SDL_fmod(SDL_min(0, draw_frame->scroll_interp.y), ctx->line_height) - ctx->line_height};
 	Uint32 linenum;
 	for (linenum = linenum_offset; linenum < lines_count + linenum_offset; ++linenum) {
 		String line = lines[linenum - linenum_offset];
@@ -1091,7 +1104,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			draw_text(ctx, start.x - prefix_width, start.y, prefix_color, prefix_size, draw_frame->line_prefix);
 		}
 		if (frame_has_line_numbers(ctx, frame)) {
-			if (start.y >= lines_bounds.y && (start.y + ctx->line_height) < lines_bounds.y + lines_bounds.h) {
+			if ((start.y + ctx->line_height) < lines_bounds.y + lines_bounds.h) {
 				draw_text_fmt(ctx, start.x - (lines_bounds.x - lines_numbers_bounds.x), start.y, line_number_color, "%u", linenum);
 			}
 		}
@@ -1099,15 +1112,11 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			String visline = vislines[vislinenum];
 #ifdef DEBUG_VISLINES
 			if (frame_has_line_numbers(ctx, frame)) {
-				if (start.y >= lines_bounds.y && (start.y + ctx->line_height) < lines_bounds.y + lines_bounds.h) {
+				if ((start.y + ctx->line_height) < lines_bounds.y + lines_bounds.h) {
 					draw_text_fmt(ctx, ctx->font_width * 2 + start.x - (lines_bounds.x - lines_numbers_bounds.x), start.y, debug_red, "%u", vislinenum);
 				}
 			}
 #endif
-			if (start.y < lines_bounds.y) {
-				start.y += ctx->line_height;
-				continue;
-			}
 			if (start.y + ctx->line_height > lines_bounds.y + lines_bounds.h + 4) break;
 			if (visline.size == 0) {
 				visline.text = line.text; // duct tape to make pointer math work
@@ -2329,7 +2338,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 		} break;
 		case SDL_EVENT_MOUSE_WHEEL: {
 			if (frame_is_multiline(ctx, ctx->focused_frame)) {
-				current_frame->scroll.y += event->wheel.y * ctx->line_height * 3;
+				current_frame->scroll.y += event->wheel.y * ctx->line_height * SCROLL_LINES_TICK;
 				current_frame->scroll_lock = true;
 				SDL_LogTrace(0, "Scroll %d to %f", ctx->focused_frame, current_frame->scroll.y);
 				ctx->should_render = true;

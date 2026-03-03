@@ -1,0 +1,1 @@
+cl /MD editor.c /I "C:\Program Files (x86)\Windows Kits\10\Include\10.0.19041.0\ucrt" /link /LIBPATH:"C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0\ucrt\x64" /LIBPATH:"C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0\um\x64"
