@@ -1071,13 +1071,19 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		ctx->should_render = true;
 	}
 	Uint32 lines_count;
-	lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, text, 0);
+	String offset_line = get_vis_line(ctx, bounds, draw_frame->buffer->text_size, draw_frame->buffer->text, SDL_max(0, -draw_frame->scroll_interp.y / ctx->line_height));
+	Uint32 linenum_offset = 0;
+	if (offset_line.text > text)
+		linenum_offset = count_lines(ctx, offset_line.text - text, text);
+	else if (offset_line.text == 0)
+		linenum_offset = count_lines(ctx, draw_frame->buffer->text_size, text);
+	lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, text, linenum_offset);
 	Uint32 selection_min = SDL_min(draw_frame->cursor, draw_frame->selection);
 	Uint32 selection_max = SDL_max(draw_frame->cursor, draw_frame->selection);
-	// get_vis_line(scroll / line_height) -> count_lines(until visline.text) -> start = line_count
-	SDL_FPoint start = {lines_bounds.x, lines_bounds.y + SDL_min(0, draw_frame->scroll_interp.y)};
-	for (Uint32 linenum = 0; linenum < lines_count; ++linenum) {
-		String line = lines[linenum];
+	SDL_FPoint start = {lines_bounds.x, lines_bounds.y + SDL_fmod(SDL_min(0, draw_frame->scroll_interp.y), ctx->line_height)};
+	Uint32 linenum;
+	for (linenum = linenum_offset; linenum < lines_count + linenum_offset; ++linenum) {
+		String line = lines[linenum - linenum_offset];
 		Uint32 vislines_count = split_into_vis_lines(ctx, lines_bounds, line, SDL_arraysize(vislines), vislines);
 		if (draw_frame->line_prefix != NULL) {
 			Uint32 prefix_size = SDL_utf8strlen(draw_frame->line_prefix);
@@ -1177,12 +1183,12 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 					search_cursor += ctx->frames[draw_frame->search_frame].buffer->text_size;
 				}
 			} // end of searching mode
-			Sint32 hscroll = SDL_floor(draw_frame->scroll.x / ctx->font_width);
+			Sint32 hscroll = SDL_floor(draw_frame->scroll_interp.x / ctx->font_width);
 			SDL_FPoint line_start = start;
 			render_line(ctx, lines_bounds, &start, SDL_max(0, (Sint32)visline.size - hscroll), visline.text);
 			if (((visline.text - text <= draw_frame->selection) && (visline.text - text + visline.size >= draw_frame->selection))) {
 				SDL_FRect selection_rect = {
-					.x = line_start.x + string_to_visual(ctx, SDL_min(visline.size, draw_frame->selection - (visline.text - text)), visline.text) * ctx->font_width - draw_frame->scroll.x,
+					.x = line_start.x + string_to_visual(ctx, SDL_min(visline.size, draw_frame->selection - (visline.text - text)), visline.text) * ctx->font_width - draw_frame->scroll_interp.x,
 					.y = line_start.y,
 					.w = ctx->font_width,
 					.h = ctx->line_height,
@@ -1193,7 +1199,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 				}
 			} // end of selection cursor
 			if (((visline.text - text <= draw_frame->cursor) && (visline.text - text + visline.size >= draw_frame->cursor))) {
-				Uint32 visual_x = string_to_visual(ctx, SDL_min(visline.size, draw_frame->cursor - (visline.text - text)), visline.text) * ctx->font_width - draw_frame->scroll.x;
+				Uint32 visual_x = string_to_visual(ctx, SDL_min(visline.size, draw_frame->cursor - (visline.text - text)), visline.text) * ctx->font_width - draw_frame->scroll_interp.x;
 				SDL_FPoint actual_cursor_pos = {
 					.x = line_start.x + SDL_fmod(visual_x, lines_bounds.w),
 					.y = line_start.y + SDL_floor(visual_x / lines_bounds.w) * ctx->line_height,
@@ -1245,7 +1251,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		}
 	}
 	if (frame_has_line_numbers(ctx, frame)) {
-		for (Uint32 linenum = lines_count; (start.y + ctx->line_height) < lines_numbers_bounds.y + lines_numbers_bounds.h; ++linenum) {
+		for (; (start.y + ctx->line_height) < lines_numbers_bounds.y + lines_numbers_bounds.h; ++linenum) {
 			draw_text_fmt(ctx, start.x - (lines_bounds.x - lines_numbers_bounds.x), start.y, line_number_dimmed_color, "%u", linenum);
 			start.y += ctx->line_height;
 		}

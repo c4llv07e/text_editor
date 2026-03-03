@@ -10,7 +10,7 @@
 - Creation of the new frames
 - scroll centered to cursor on most moves
 	- mouse click
-- fix lines draw until 255
+- fix scrolling chops on multiple visual lines
 - sequential pressing ctrl-q should repeat last search
 - holding mouse to select text
 - more keybinds
