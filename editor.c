@@ -172,6 +172,7 @@ typedef struct Ctx {
 	Uint64 last_middle_click;
 	SDL_FPoint active_cursor_pos;
 #ifdef COOL
+	float current_scale_val;
 	SDL_AudioStream *sopratmat_stream;
 	SDL_Texture *sopratmat_texture;
 	bool sopratmat_enabled;
@@ -184,6 +185,7 @@ typedef struct Ctx {
 	float spectrum[FFT_SIZE / 2];
 	Uint32 sample_index;
 	float old_sopratmat_size;
+	float sopratmat_min, sopratmat_max;
 	int sopratmat_freq;
 #endif
 #ifdef DEBUG
@@ -1152,7 +1154,7 @@ static void sopratmat_callback(void *userdata, SDL_AudioStream *stream, int addi
 				float mag = SDL_sqrtf(ctx->fft_buffer[j].x * ctx->fft_buffer[j].x
 					+ ctx->fft_buffer[j].y * ctx->fft_buffer[j].y) / FFT_SIZE;
 				mag = SDL_logf(1.0f + mag * 20.0f);
-				float smooth = 0.6f;
+				float smooth = 0.4f;
 				ctx->spectrum[j] = smooth * ctx->spectrum[j] + (1.0 - smooth) * mag;
 			}
 			ctx->sample_index = 0;
@@ -1165,16 +1167,18 @@ static void render_cool(Ctx *ctx) {
 	if (!ctx->sopratmat_enabled) return;
 	if (!ctx->sopratmat_texture) return;
 	ctx->should_render = true;
-#define SOPRATMAT_MARGIN 20
+#define SOPRATMAT_MARGIN 40
 	SDL_FRect bounds = {
-		.w = ctx->sopratmat_texture->w / 6,
-		.h = ctx->sopratmat_texture->h / 6,
+		.w = ctx->sopratmat_texture->w / 8,
+		.h = ctx->sopratmat_texture->h / 8,
 	};
 	float max_hw = SDL_min(bounds.h, bounds.w);
 	bounds.x = ctx->win_w - bounds.w - SOPRATMAT_MARGIN;
 	bounds.y = bounds.h / 2 + SOPRATMAT_MARGIN;
-	float cell_width = bounds.w/FFT_BARS;
 	float value = SDL_sqrt(sum_arr(ctx->spectrum, 0, (FFT_SIZE / 2))) / 6;
+	float scale_value = SDL_logf(SDL_fabs(value / 3.0 - 1.0f)/5.0f + 1.5f) + 0.5f;
+	ctx->current_scale_val = lerp(ctx->current_scale_val, scale_value, 0.7f);
+	SDL_SetRenderScale(ctx->renderer, ctx->current_scale_val, ctx->current_scale_val);
 	SDL_FRect old_bounds = bounds;
 	bounds.x -= bounds.w * ctx->old_sopratmat_size / 2;
 	bounds.y -= bounds.h * ctx->old_sopratmat_size / 2;
@@ -1187,20 +1191,39 @@ static void render_cool(Ctx *ctx) {
 	float max_freq = sample_rate / 2.0f;
 	set_color(ctx, debug_red);
 	for (size_t i = 0; i < FFT_BARS; ++i) {
-		float f1 = min_freq * SDL_powf(max_freq/min_freq, (float)i / FFT_BARS);
-		float f2 = min_freq * SDL_powf(max_freq/min_freq, (float)(i+1) / FFT_BARS);
+#if 1
+		float gamma = 0.6;
+		float f1 = min_freq * SDL_powf(max_freq/min_freq, SDL_powf((float)i / FFT_BARS, gamma));
+		float f2 = min_freq * SDL_powf(max_freq/min_freq, SDL_powf((float)(i+1) / FFT_BARS, gamma));
 		float start = (int)(f1 * FFT_SIZE / sample_rate);
 		float end = SDL_clamp((int)(f2 * FFT_SIZE / sample_rate), start + 1, FFT_SIZE / 2);
+#else
+		float rate = 3.0f;
+		float start = SDL_powf((float)i / FFT_BARS, rate) * (FFT_SIZE / 2);
+		float end = SDL_min(start + 1, SDL_powf((float)(i + 1) / FFT_BARS, rate) * (FFT_SIZE / 2));
+#endif
 		float sum = sum_arr(ctx->spectrum, start, end);
-		float mag = sum / (end - start) * old_bounds.h * 1.5f;
+		float mag = sum / (end - start) * old_bounds.h * 2.5f;
+/* Circle = 0 */ #if 0
+		float cell_width = old_bounds.w*2/FFT_BARS;
 		SDL_RenderFillRect(ctx->renderer, &(SDL_FRect){
-			.x = old_bounds.x + i * cell_width,
+			.x = old_bounds.x + i * cell_width - old_bounds.w * 1,
 			.y = old_bounds.y + old_bounds.h - mag,
 			.w = cell_width,
 			.h = mag,
 		});
+#else
+		mag *= 3;
+		float rot = 2 * SDL_PI_F * i / FFT_BARS;
+		set_color(ctx, hsv_to_rgb((SDL_Color){mag * 0.4, 255, 255, SDL_ALPHA_OPAQUE}));
+		SDL_RenderLine(ctx->renderer,
+			bounds.x + bounds.w / 2 + SDL_cosf(rot) * max_hw,
+			bounds.y + bounds.h / 2 + SDL_sinf(rot) * max_hw,
+			bounds.x + bounds.w / 2 + SDL_cosf(rot) * (max_hw + mag),
+			bounds.y + bounds.h / 2 + SDL_sinf(rot) * (max_hw + mag)
+		);
+#endif
 	}
-	set_color(ctx, debug_red);
 }
 #endif
 
