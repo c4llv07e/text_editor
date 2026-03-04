@@ -166,6 +166,18 @@ typedef struct Ctx {
 	SDL_FRect debug_screen_rect;
 	Uint64 last_middle_click;
 	SDL_FPoint active_cursor_pos;
+#ifdef COOL
+	SDL_AudioStream *sopratmat_stream;
+	SDL_Texture *sopratmat_texture;
+	bool sopratmat_enabled;
+	Uint32 sopratmat_audio_buf_len;
+	Uint8 *sopratmat_audio_buf;
+	Uint32 transformed_len;
+#define N 480
+	SDL_FPoint transformed[N];
+#undef N
+	float old_sopratmat_size;
+#endif
 #ifdef DEBUG
 	int draw_text_back_color;
 #endif
@@ -218,6 +230,31 @@ static inline SDL_Color hsv_to_rgb(SDL_Color hsv) {
 	rgb.g = (Uint8)(g * 255.0f + 0.5f);
 	rgb.b = (Uint8)(b * 255.0f + 0.5f);
 	return rgb;
+}
+
+static inline void dft(size_t in_size, float in[in_size], SDL_FPoint out[in_size]) {
+	for (size_t f = 0; f < in_size; ++f) {
+		out[f].x = 0;
+		out[f].y = 0;
+		for (size_t i = 0; i < in_size; ++i) {
+			float t = (float)i/in_size;
+			out[f].x += in[i] * SDL_sinf(2 * SDL_PI_F * f * t);
+			out[f].y += in[i] * SDL_cosf(2 * SDL_PI_F * f * t);
+		}
+	}
+}
+
+static inline void dft_u8(size_t in_size, Uint8 in[in_size], SDL_FPoint out[in_size]) {
+	for (size_t f = 0; f < in_size; ++f) {
+		out[f].x = 0;
+		out[f].y = 0;
+		for (size_t i = 0; i < in_size; ++i) {
+			float t = (float)i/in_size;
+			float val = (float)in[i] * SDL_MAX_UINT8;
+			out[f].x += val * SDL_sinf(2 * SDL_PI_F * f * t);
+			out[f].y += val * SDL_cosf(2 * SDL_PI_F * f * t);
+		}
+	}
 }
 
 static inline bool frame_has_line_numbers(Ctx *ctx, Uint32 frame) {
@@ -1043,9 +1080,94 @@ static void render_line(Ctx *ctx, SDL_FRect bounds, SDL_FPoint *start, size_t te
 	start->y += ctx->line_height;
 }
 
+#ifdef COOL
+static void sopratmat_callback(void *userdata, SDL_AudioStream *stream, int additional_amount, int total_amount) {
+	Ctx *ctx = (Ctx *)userdata;
+	(void) additional_amount;
+	(void) total_amount;
+	if (!SDL_PutAudioStreamData(stream, ctx->sopratmat_audio_buf, additional_amount)) {
+		SDL_LogError(0, "Can't put audio data into stream: %s", SDL_GetError());
+		return;
+	}
+	ctx->transformed_len = SDL_min(additional_amount, SDL_arraysize(ctx->transformed));
+	dft_u8(ctx->transformed_len, ctx->sopratmat_audio_buf, ctx->transformed);
+	ctx->sopratmat_audio_buf += additional_amount;
+	ctx->sopratmat_audio_buf_len -= additional_amount;
+}
+
+static void render_cool(Ctx *ctx) {
+	if (!ctx->sopratmat_enabled) return;
+	if (!ctx->sopratmat_texture) return;
+	ctx->should_render = true;
+#define SOPRATMAT_MARGIN 20
+	SDL_FRect bounds = {
+		.w = ctx->sopratmat_texture->w / 6,
+		.h = ctx->sopratmat_texture->h / 6,
+	};
+	float max_hw = SDL_min(bounds.h, bounds.w);
+	bounds.x = ctx->win_w - bounds.w - SOPRATMAT_MARGIN;
+	bounds.y = bounds.h / 2 + SOPRATMAT_MARGIN;
+	float cell_width = bounds.w/SDL_arraysize(ctx->transformed);
+	float sum = 0;
+	for (Uint32 i = 0; i < SDL_arraysize(ctx->transformed); ++i) {
+		float val = SDL_max(0, SDL_max(ctx->transformed[i].y, ctx->transformed[i].x));
+		float height = SDL_max(0, SDL_log(val));
+		sum += height;
+	}
+	float value = sum / SDL_arraysize(ctx->transformed) / 6;
+	value *= value;
+	value *= value;
+	value /= 4;
+	if (SDL_isnan(value)) value = 1;
+	SDL_FRect old_bounds = bounds;
+	bounds.x -= bounds.w * ctx->old_sopratmat_size / 2;
+	bounds.y -= bounds.h * ctx->old_sopratmat_size / 2;
+	bounds.w *= ctx->old_sopratmat_size;
+	bounds.h *= ctx->old_sopratmat_size;
+	ctx->old_sopratmat_size = lerp(ctx->old_sopratmat_size, value, 0.5);
+	SDL_RenderTextureRotated(ctx->renderer, ctx->sopratmat_texture, NULL, &bounds, ctx->last_render / 25000000.0, NULL, SDL_FLIP_NONE);
+#if 0
+	set_color(ctx, debug_red);
+	SDL_RenderRect(ctx->renderer, &bounds);
+#endif
+	set_color(ctx, debug_red);
+	SDL_FPoint old_pos = {0};
+	SDL_FPoint current_pos;
+	for (Uint32 i = 0; i < SDL_arraysize(ctx->transformed); ++i) {
+		float val = SDL_max(0, ctx->transformed[i].x) + SDL_max(0, ctx->transformed[i].y);
+		float height = SDL_max(0, SDL_sqrt(val));
+#if 1
+		if (height == 0) continue;
+		float rot = 2 * SDL_PI_F * i / SDL_arraysize(ctx->transformed);
+		current_pos.x = bounds.x + bounds.w / 2 + SDL_cosf(rot) * (max_hw + height / 10) / 2;
+		current_pos.y = bounds.y + bounds.h / 2 + SDL_sinf(rot) * (max_hw + height / 10) / 2;
+		if (i > 0) {
+			current_pos.x = lerp(current_pos.x, old_pos.x, 0.5);
+			current_pos.y = lerp(current_pos.y, old_pos.y, 0.5);
+			SDL_RenderLine(ctx->renderer,
+				old_pos.x,
+				old_pos.y,
+				current_pos.x,
+				current_pos.y
+				);
+		}
+		old_pos = current_pos;
+#else
+		SDL_RenderRect(ctx->renderer, &(SDL_FRect){
+			.x = old_bounds.x + i * cell_width,
+			.y = old_bounds.y,
+			.w = cell_width,
+			.h = height,
+		});
+#endif
+	}
+}
+#endif
+
 static void render_frame(Ctx *ctx, Uint32 frame) {
 	String lines[0x100];
 	String vislines[0x10] = {0};
+	(void) vislines;
 	Frame *draw_frame = &ctx->frames[frame];
 	SDL_assert(SDL_arraysize(lines) >= (draw_frame->bounds.h / ctx->line_height));
 	if (draw_frame->frame_type == Frame_Type_search) {
@@ -1784,6 +1906,9 @@ static void render(Ctx *ctx, bool debug_screen) {
 	SDL_RenderFillRect(ctx->renderer, &test_pos);
 	SDL_RenderTexture(ctx->renderer, ctx->tab_texture, NULL, &test_pos);
 #endif
+#ifdef COOL
+	render_cool(ctx);
+#endif
 	SDL_RenderPresent(ctx->renderer);
 #ifdef DEBUG_RENDER_FAN
 	ctx->render_rotate_fan = (ctx->render_rotate_fan + 1) % 4;
@@ -1821,27 +1946,6 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 	return SDL_APP_CONTINUE;
 }
 
-#ifdef NO_MAIN
-int main(void) {
-	Ctx _ctx;
-	Ctx *ctx = &_ctx;
-	ctx->font_width = 7;
-	SDL_FRect bounds = {.x = 28.00, .y = 230.39, .w = 131.27, .h = 232.04};
-#if 0
-	char *text;
-	size_t text_size;
-	text = SDL_LoadFile(__FILE__, &text_size);
-#else
-	char text[] = "ointer for buffers.\n\nsaoteuh";
-	size_t text_size = SDL_arraysize(text);
-#endif
-	for (Uint32 linenum = 0; linenum < 0x10; ++linenum) {
-		String visline = get_vis_line(ctx, bounds, text_size, text, linenum);
-		SDL_Log("%u: [%lu]|%.*s|", linenum, visline.size, (int)visline.size, visline.text);
-	}
-}
-#endif
-
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	(void) argc;
 	(void) argv;
@@ -1862,7 +1966,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	};
 	ctx->active_cursor_pos = (SDL_FPoint){0};
 	SDL_SetAppMetadata("Text editor", "1.0", "c4ll.text-editor");
-	if (!SDL_Init(SDL_INIT_VIDEO)) {
+	if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
 		SDL_LogCritical(0, "Couldn't initialize SDL: %s", SDL_GetError());
 		return SDL_APP_FAILURE;
 	}
@@ -1934,6 +2038,40 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 		SDL_LogCritical(0, "Can't open font: %s", SDL_GetError());
 		return SDL_APP_FAILURE;
 	}
+#ifdef COOL
+	SDL_Surface *sopratmat_surface;
+	ctx->old_sopratmat_size = 1;
+	sopratmat_surface = SDL_LoadSurface("./sopratmat.png");
+	if (sopratmat_surface) {
+		ctx->sopratmat_texture = SDL_CreateTextureFromSurface(ctx->renderer, sopratmat_surface);
+		if (!ctx->sopratmat_texture) {
+			SDL_LogError(0, "Can't convert sopromat image: %s", SDL_GetError());
+		} else {
+			SDL_AudioSpec spec;
+			if (!SDL_LoadWAV("./trick_disco.wav", &spec, &ctx->sopratmat_audio_buf, &ctx->sopratmat_audio_buf_len)) {
+				SDL_LogError(0, "Can't load sopromat audiofile: %s", SDL_GetError());
+			} else {
+				SDL_AudioStream *sopratmat_audiostream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, sopratmat_callback, (void *)ctx);
+				if (!sopratmat_audiostream) {
+					SDL_LogError(0, "Can't open audio output: %s", SDL_GetError());
+				} else {
+					SDL_AudioDeviceID audio_device = SDL_GetAudioStreamDevice(sopratmat_audiostream);
+					if (audio_device == 0) {
+						SDL_LogError(0, "Can't get audio stream device: %s", SDL_GetError());
+					} else {
+						if (!SDL_ResumeAudioDevice(audio_device)) {
+							SDL_LogError(0, "Can't resume audio: %s", SDL_GetError());
+						} else {
+							ctx->sopratmat_enabled = true;
+						}
+					}
+				}
+			}
+		}
+	} else {
+		SDL_LogError(0, "Can't load sopromat image: %s", SDL_GetError());
+	}
+#endif
 	int font_width_int;
 	TTF_GetGlyphMetrics(ctx->font, 'w', NULL, NULL, NULL, NULL, &font_width_int);
 	ctx->font_width = (float)font_width_int;
