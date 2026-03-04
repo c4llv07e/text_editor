@@ -1047,6 +1047,75 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	String lines[0x100];
 	String vislines[0x10] = {0};
 	Frame *draw_frame = &ctx->frames[frame];
+	SDL_assert(SDL_arraysize(lines) >= (draw_frame->bounds.h / ctx->line_height));
+	if (draw_frame->frame_type == Frame_Type_search) {
+		if (draw_frame->search_status == Search_Status_not_found) {
+			set_color(ctx, background_color_error);
+		} else {
+			SDL_SetRenderDrawColor(ctx->renderer, 0x12, 0x12, 0x12, SDL_ALPHA_OPAQUE);
+		}
+	} else {
+		if (ctx->focused_frame == frame) {
+			SDL_SetRenderDrawColor(ctx->renderer, 0x0c, 0x20, 0x0c, SDL_ALPHA_OPAQUE);
+		} else {
+			SDL_SetRenderDrawColor(ctx->renderer, 0x08, 0x08, 0x08, SDL_ALPHA_OPAQUE);
+		}
+	}
+	SDL_RenderFillRect(ctx->renderer, &draw_frame->bounds);
+	if (SDL_fabs(ctx->frames[frame].scroll_interp.y - ctx->frames[frame].scroll.y) > 1) {
+		float speed = 4;
+		float current = ctx->frames[frame].scroll_interp.y;
+		float target = ctx->frames[frame].scroll.y;
+		float delta = target - current;
+		ctx->frames[frame].scroll_interp.y += delta * SDL_clamp(SDL_pow(SDL_abs(delta), 0.5) * speed * ctx->deltatime, 0, 1);
+		ctx->should_render = true;
+		set_color(ctx, debug_red);
+	} else {
+		// Hate these floating point errors
+		ctx->frames[frame].scroll_interp.y = ctx->frames[frame].scroll.y;
+		set_color(ctx, debug_blue);
+	}
+	SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
+		.x = draw_frame->bounds.x + draw_frame->scroll_interp.x,
+		.y = draw_frame->bounds.y + draw_frame->scroll_interp.y,
+		.w = draw_frame->bounds.w,
+		.h = draw_frame->bounds.h,
+	});
+	Sint32 number = 0;
+	if (draw_frame->scroll_interp.y < 0)
+		number = SDL_floor((-draw_frame->scroll_interp.y / ctx->line_height));
+	SDL_FPoint start = {draw_frame->bounds.x + draw_frame->scroll_interp.x, draw_frame->bounds.y + SDL_fmod(draw_frame->scroll_interp.y, ctx->line_height)};
+	Uint32 lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, draw_frame->buffer->text, number);
+	set_color(ctx, line_number_dimmed_color);
+	SDL_RenderFillRect(ctx->renderer, &(SDL_FRect){
+		.x = 400,
+		.y = 200,
+		.w = ctx->font_width * 25,
+		.h = ctx->line_height * 4,
+	});
+	draw_text_fmt(ctx, 400, 200 + ctx->line_height * 0, debug_purple, "number = %u", number);
+	draw_text_fmt(ctx, 400, 200 + ctx->line_height * 1, debug_purple, "start.y = %.02f", start.y);
+	draw_text_fmt(ctx, 400, 200 + ctx->line_height * 2, debug_purple, "scroll_interp.y = %.02f", draw_frame->scroll_interp.y);
+	draw_text_fmt(ctx, 400, 200 + ctx->line_height * 3, debug_purple, "s/lh = %.02f", (-draw_frame->scroll_interp.y / ctx->line_height));
+	Uint32 linenum = 0;
+	for (;;) {
+		String *line = NULL;
+		if (lines_count > linenum) line = lines + linenum;
+		draw_text_fmt(ctx, start.x, start.y, line_number_color, "%d", number);
+		if (line && line->size > 0) {
+			draw_text(ctx, start.x + ctx->font_width * 4, start.y, text_color, line->size, line->text);
+		}
+		number += 1;
+		linenum += 1;
+		start.y += ctx->line_height;
+		if (start.y > draw_frame->bounds.y + draw_frame->bounds.h) break;
+	}
+}
+
+static void render_frame_old(Ctx *ctx, Uint32 frame) {
+	String lines[0x100];
+	String vislines[0x10] = {0};
+	Frame *draw_frame = &ctx->frames[frame];
 #ifdef DEBUG
 	ctx->draw_text_back_color = 0;
 #endif
