@@ -48,8 +48,8 @@ extern char _binary_LiberationMono_Regular_ttf_start[];
 #define TAB_WIDTH 8
 #define UNDO_RING_SIZE 100
 
-#define FFT_SIZE 1024
-#define FFT_BARS 128
+#define FFT_SIZE 2048
+#define FFT_BARS 256
 
 #define lerp(from, to, value) ((from) + ((to) - (from)) * (value))
 
@@ -184,6 +184,7 @@ typedef struct Ctx {
 	float spectrum[FFT_SIZE / 2];
 	Uint32 sample_index;
 	float old_sopratmat_size;
+	int sopratmat_freq;
 #endif
 #ifdef DEBUG
 	int draw_text_back_color;
@@ -1181,12 +1182,17 @@ static void render_cool(Ctx *ctx) {
 	bounds.h *= ctx->old_sopratmat_size;
 	ctx->old_sopratmat_size = lerp(ctx->old_sopratmat_size, value, 0.5);
 	SDL_RenderTextureRotated(ctx->renderer, ctx->sopratmat_texture, NULL, &bounds, ctx->last_render / 25000000.0, NULL, SDL_FLIP_NONE);
+	float sample_rate = ctx->sopratmat_freq;
+	float min_freq = 20.0f;
+	float max_freq = sample_rate / 2.0f;
 	set_color(ctx, debug_red);
 	for (size_t i = 0; i < FFT_BARS; ++i) {
-		Uint32 start = i * (FFT_SIZE / 2) / FFT_BARS;
-		Uint32 end = (i + 1) * (FFT_SIZE / 2) / FFT_BARS;
+		float f1 = min_freq * SDL_powf(max_freq/min_freq, (float)i / FFT_BARS);
+		float f2 = min_freq * SDL_powf(max_freq/min_freq, (float)(i+1) / FFT_BARS);
+		float start = (int)(f1 * FFT_SIZE / sample_rate);
+		float end = SDL_clamp((int)(f2 * FFT_SIZE / sample_rate), start + 1, FFT_SIZE / 2);
 		float sum = sum_arr(ctx->spectrum, start, end);
-		float mag = sum / (end - start) * old_bounds.h;
+		float mag = sum / (end - start) * old_bounds.h * 1.5f;
 		SDL_RenderFillRect(ctx->renderer, &(SDL_FRect){
 			.x = old_bounds.x + i * cell_width,
 			.y = old_bounds.y + old_bounds.h - mag,
@@ -2090,6 +2096,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 				wav_spec = spec;
 				spec.format = SDL_AUDIO_F32;
 				spec.channels = 1;
+				ctx->sopratmat_freq = spec.freq;
 				SDL_AudioStream *sopratmat_audiostream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, sopratmat_callback, (void *)ctx);
 				if (!sopratmat_audiostream) {
 					SDL_LogError(0, "Can't open audio output: %s", SDL_GetError());
