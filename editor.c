@@ -1232,7 +1232,12 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	String vislines[0x10] = {0};
 	(void) vislines;
 	Frame *draw_frame = &ctx->frames[frame];
-	SDL_assert(SDL_arraysize(lines) >= (draw_frame->bounds.h / ctx->line_height));
+	SDL_FRect bounds = draw_frame->bounds;
+	if (!draw_frame->is_global) {
+		bounds.x += ctx->transform.x;
+		bounds.y += ctx->transform.y;
+	}
+	SDL_assert(SDL_arraysize(lines) >= (bounds.h / ctx->line_height));
 	if (draw_frame->frame_type == Frame_Type_search) {
 		if (draw_frame->search_status == Search_Status_not_found) {
 			set_color(ctx, background_color_error);
@@ -1246,7 +1251,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 			SDL_SetRenderDrawColor(ctx->renderer, 0x08, 0x08, 0x08, SDL_ALPHA_OPAQUE);
 		}
 	}
-	SDL_RenderFillRect(ctx->renderer, &draw_frame->bounds);
+	SDL_RenderFillRect(ctx->renderer, &bounds);
 	if (SDL_fabs(ctx->frames[frame].scroll_interp.y - ctx->frames[frame].scroll.y) > 1) {
 		float speed = 4;
 		float current = ctx->frames[frame].scroll_interp.y;
@@ -1261,15 +1266,15 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		set_color(ctx, debug_blue);
 	}
 	SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
-		.x = draw_frame->bounds.x + draw_frame->scroll_interp.x,
-		.y = draw_frame->bounds.y + draw_frame->scroll_interp.y,
-		.w = draw_frame->bounds.w,
-		.h = draw_frame->bounds.h,
+		.x = bounds.x + draw_frame->scroll_interp.x,
+		.y = bounds.y + draw_frame->scroll_interp.y,
+		.w = bounds.w,
+		.h = bounds.h,
 	});
 	Sint32 number = 0;
 	if (draw_frame->scroll_interp.y < 0)
 		number = SDL_floor((-draw_frame->scroll_interp.y / ctx->line_height));
-	SDL_FPoint start = {draw_frame->bounds.x + draw_frame->scroll_interp.x, draw_frame->bounds.y + SDL_fmod(draw_frame->scroll_interp.y, ctx->line_height)};
+	SDL_FPoint start = {bounds.x + draw_frame->scroll_interp.x, bounds.y + SDL_fmod(draw_frame->scroll_interp.y, ctx->line_height)};
 	Uint32 lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, draw_frame->buffer->text, number);
 	set_color(ctx, line_number_dimmed_color);
 	SDL_RenderFillRect(ctx->renderer, &(SDL_FRect){
@@ -1293,7 +1298,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		number += 1;
 		linenum += 1;
 		start.y += ctx->line_height;
-		if (start.y > draw_frame->bounds.y + draw_frame->bounds.h) break;
+		if (start.y > bounds.y + bounds.h) break;
 	}
 }
 
