@@ -1110,8 +1110,8 @@ static void render_cool(Ctx *ctx) {
 	float cell_width = bounds.w/SDL_arraysize(ctx->transformed);
 	float sum = 0;
 	for (Uint32 i = 0; i < SDL_arraysize(ctx->transformed); ++i) {
-		float val = SDL_max(0, SDL_max(ctx->transformed[i].y, ctx->transformed[i].x));
-		float height = SDL_max(0, SDL_log(val));
+		float val = SDL_log(SDL_max(1, SDL_max(ctx->transformed[i].y, ctx->transformed[i].x)));
+		float height = SDL_max(0, val);
 		sum += height;
 	}
 	float value = sum / SDL_arraysize(ctx->transformed) / 6;
@@ -1134,7 +1134,7 @@ static void render_cool(Ctx *ctx) {
 	SDL_FPoint old_pos = {0};
 	SDL_FPoint current_pos;
 	for (Uint32 i = 0; i < SDL_arraysize(ctx->transformed); ++i) {
-		float val = SDL_max(0, ctx->transformed[i].x) + SDL_max(0, ctx->transformed[i].y);
+		float val = SDL_max(0, SDL_max(ctx->transformed[i].y, ctx->transformed[i].x));
 		float height = SDL_max(0, SDL_sqrt(val));
 #if 1
 		if (height == 0) continue;
@@ -1155,9 +1155,9 @@ static void render_cool(Ctx *ctx) {
 #else
 		SDL_RenderRect(ctx->renderer, &(SDL_FRect){
 			.x = old_bounds.x + i * cell_width,
-			.y = old_bounds.y,
+			.y = old_bounds.y + old_bounds.h - SDL_sqrt(height),
 			.w = cell_width,
-			.h = height,
+			.h = SDL_sqrt(height),
 		});
 #endif
 	}
