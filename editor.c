@@ -1135,15 +1135,16 @@ static void render_cool(Ctx *ctx) {
 	SDL_FPoint current_pos;
 	for (Uint32 i = 0; i < SDL_arraysize(ctx->transformed); ++i) {
 		float val = SDL_max(0, SDL_max(ctx->transformed[i].y, ctx->transformed[i].x));
-		float height = SDL_max(0, SDL_sqrt(val));
-#if 1
+		float height = SDL_max(0, val / 1000);
+#if 0
 		if (height == 0) continue;
 		float rot = 2 * SDL_PI_F * i / SDL_arraysize(ctx->transformed);
 		current_pos.x = bounds.x + bounds.w / 2 + SDL_cosf(rot) * (max_hw + height / 10) / 2;
 		current_pos.y = bounds.y + bounds.h / 2 + SDL_sinf(rot) * (max_hw + height / 10) / 2;
 		if (i > 0) {
-			current_pos.x = lerp(current_pos.x, old_pos.x, 0.5);
-			current_pos.y = lerp(current_pos.y, old_pos.y, 0.5);
+			float smoothness = 0.8;
+			current_pos.x = lerp(old_pos.x, current_pos.x, smoothness);
+			current_pos.y = lerp(old_pos.y, current_pos.y, smoothness);
 			SDL_RenderLine(ctx->renderer,
 				old_pos.x,
 				old_pos.y,
