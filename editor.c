@@ -48,7 +48,12 @@ extern char _binary_LiberationMono_Regular_ttf_start[];
 #define TAB_WIDTH 8
 #define UNDO_RING_SIZE 100
 
+#define FFT_SIZE 1024
+#define FFT_BARS 128
+
 #define lerp(from, to, value) ((from) + ((to) - (from)) * (value))
+
+typedef SDL_FPoint FComplex;
 
 typedef struct {
 	size_t size;
@@ -170,12 +175,14 @@ typedef struct Ctx {
 	SDL_AudioStream *sopratmat_stream;
 	SDL_Texture *sopratmat_texture;
 	bool sopratmat_enabled;
+	Uint32 sopratmat_pos;
 	Uint32 sopratmat_audio_buf_len;
 	Uint8 *sopratmat_audio_buf;
 	Uint32 transformed_len;
-#define N 480
-	SDL_FPoint transformed[N];
-#undef N
+	float samples_buffer[FFT_SIZE];
+	FComplex fft_buffer[FFT_SIZE];
+	float spectrum[FFT_SIZE / 2];
+	Uint32 sample_index;
 	float old_sopratmat_size;
 #endif
 #ifdef DEBUG
@@ -232,6 +239,44 @@ static inline SDL_Color hsv_to_rgb(SDL_Color hsv) {
 	return rgb;
 }
 
+static inline FComplex c_add(FComplex a, FComplex b) {
+	return (FComplex){a.x + b.x, a.y + b.y};
+}
+
+static inline FComplex c_sub(FComplex a, FComplex b) {
+	return (FComplex){a.x - b.x, a.y - b.y};
+}
+
+static inline FComplex c_mul(FComplex a, FComplex b) {
+	return (FComplex){
+		a.x * b.x - a.y * b.y,
+		a.x * b.y + a.y * b.x
+	};
+}
+
+static inline FComplex c_exp(float theta) {
+	return (FComplex){SDL_cosf(theta), SDL_sinf(theta)};
+}
+
+static void fft(size_t buffer_size, FComplex buffer[buffer_size], Uint32 step) {
+	if (step >= buffer_size) return;
+	fft(buffer_size, buffer, step * 2);
+	fft(buffer_size, buffer + step, step * 2);
+	for (size_t k = 0; k < buffer_size; k += 2 * step) {
+		float a = -2.0f * SDL_PI_F * k * buffer_size;
+		FComplex t = c_mul((FComplex){SDL_cosf(a), SDL_sinf(a)}, buffer[k + step]);
+		FComplex u = buffer[k];
+		buffer[k] = c_add(u, t);
+		buffer[k + step] = c_sub(u, t);
+	}
+}
+
+static inline float sum_arr(float arr[], Uint32 start, Uint32 end) {
+	float sum = 0.0f;
+	while (start < end) sum += arr[start++];
+	return sum;
+}
+
 static inline void dft(size_t in_size, float in[in_size], SDL_FPoint out[in_size]) {
 	for (size_t f = 0; f < in_size; ++f) {
 		out[f].x = 0;
@@ -250,7 +295,7 @@ static inline void dft_u8(size_t in_size, Uint8 in[in_size], SDL_FPoint out[in_s
 		out[f].y = 0;
 		for (size_t i = 0; i < in_size; ++i) {
 			float t = (float)i/in_size;
-			float val = (float)in[i] * SDL_MAX_UINT8;
+			float val = (float)in[i];
 			out[f].x += val * SDL_sinf(2 * SDL_PI_F * f * t);
 			out[f].y += val * SDL_cosf(2 * SDL_PI_F * f * t);
 		}
@@ -1083,16 +1128,36 @@ static void render_line(Ctx *ctx, SDL_FRect bounds, SDL_FPoint *start, size_t te
 #ifdef COOL
 static void sopratmat_callback(void *userdata, SDL_AudioStream *stream, int additional_amount, int total_amount) {
 	Ctx *ctx = (Ctx *)userdata;
-	(void) additional_amount;
 	(void) total_amount;
-	if (!SDL_PutAudioStreamData(stream, ctx->sopratmat_audio_buf, additional_amount)) {
-		SDL_LogError(0, "Can't put audio data into stream: %s", SDL_GetError());
-		return;
+	if (additional_amount <= 0) return;
+	if (!ctx->sopratmat_audio_buf) return;
+	float *to_put = (void *)(ctx->sopratmat_audio_buf + ctx->sopratmat_pos);
+	additional_amount = SDL_min(additional_amount, ctx->sopratmat_audio_buf_len - ctx->sopratmat_pos);
+	SDL_PutAudioStreamData(stream, to_put, additional_amount);
+	ctx->sopratmat_pos += additional_amount;
+	if (ctx->sopratmat_pos >= ctx->sopratmat_audio_buf_len) {
+		ctx->sopratmat_pos = 0;
 	}
-	ctx->transformed_len = SDL_min(additional_amount, SDL_arraysize(ctx->transformed));
-	dft_u8(ctx->transformed_len, ctx->sopratmat_audio_buf, ctx->transformed);
-	ctx->sopratmat_audio_buf += additional_amount;
-	ctx->sopratmat_audio_buf_len -= additional_amount;
+	size_t samples = additional_amount / sizeof *to_put;
+	for (size_t i = 0; i < samples; ++i) {
+		ctx->samples_buffer[ctx->sample_index++] = to_put[i];
+		if (ctx->sample_index >= FFT_SIZE) {
+			for (size_t j = 0; j < FFT_SIZE; ++j) {
+				ctx->fft_buffer[j].x = ctx->samples_buffer[j];
+				ctx->fft_buffer[j].y = 0;
+			}
+			fft(FFT_SIZE, ctx->fft_buffer, 1);
+			for (size_t j = 0; j < FFT_SIZE / 2; ++j) {
+				float mag = SDL_sqrtf(ctx->fft_buffer[j].x * ctx->fft_buffer[j].x
+					+ ctx->fft_buffer[j].y * ctx->fft_buffer[j].y) / FFT_SIZE;
+				mag = SDL_logf(1.0f + mag * 20.0f);
+				float smooth = 0.6f;
+				ctx->spectrum[j] = smooth * ctx->spectrum[j] + (1.0 - smooth) * mag;
+			}
+			ctx->sample_index = 0;
+		}
+	}
+	return;
 }
 
 static void render_cool(Ctx *ctx) {
@@ -1107,18 +1172,8 @@ static void render_cool(Ctx *ctx) {
 	float max_hw = SDL_min(bounds.h, bounds.w);
 	bounds.x = ctx->win_w - bounds.w - SOPRATMAT_MARGIN;
 	bounds.y = bounds.h / 2 + SOPRATMAT_MARGIN;
-	float cell_width = bounds.w/SDL_arraysize(ctx->transformed);
-	float sum = 0;
-	for (Uint32 i = 0; i < SDL_arraysize(ctx->transformed); ++i) {
-		float val = SDL_log(SDL_max(1, SDL_max(ctx->transformed[i].y, ctx->transformed[i].x)));
-		float height = SDL_max(0, val);
-		sum += height;
-	}
-	float value = sum / SDL_arraysize(ctx->transformed) / 6;
-	value *= value;
-	value *= value;
-	value /= 4;
-	if (SDL_isnan(value)) value = 1;
+	float cell_width = bounds.w/FFT_BARS;
+	float value = SDL_sqrt(sum_arr(ctx->spectrum, 0, (FFT_SIZE / 2))) / 6;
 	SDL_FRect old_bounds = bounds;
 	bounds.x -= bounds.w * ctx->old_sopratmat_size / 2;
 	bounds.y -= bounds.h * ctx->old_sopratmat_size / 2;
@@ -1126,42 +1181,20 @@ static void render_cool(Ctx *ctx) {
 	bounds.h *= ctx->old_sopratmat_size;
 	ctx->old_sopratmat_size = lerp(ctx->old_sopratmat_size, value, 0.5);
 	SDL_RenderTextureRotated(ctx->renderer, ctx->sopratmat_texture, NULL, &bounds, ctx->last_render / 25000000.0, NULL, SDL_FLIP_NONE);
-#if 0
 	set_color(ctx, debug_red);
-	SDL_RenderRect(ctx->renderer, &bounds);
-#endif
-	set_color(ctx, debug_red);
-	SDL_FPoint old_pos = {0};
-	SDL_FPoint current_pos;
-	for (Uint32 i = 0; i < SDL_arraysize(ctx->transformed); ++i) {
-		float val = SDL_max(0, SDL_max(ctx->transformed[i].y, ctx->transformed[i].x));
-		float height = SDL_max(0, val / 1000);
-#if 0
-		if (height == 0) continue;
-		float rot = 2 * SDL_PI_F * i / SDL_arraysize(ctx->transformed);
-		current_pos.x = bounds.x + bounds.w / 2 + SDL_cosf(rot) * (max_hw + height / 10) / 2;
-		current_pos.y = bounds.y + bounds.h / 2 + SDL_sinf(rot) * (max_hw + height / 10) / 2;
-		if (i > 0) {
-			float smoothness = 0.8;
-			current_pos.x = lerp(old_pos.x, current_pos.x, smoothness);
-			current_pos.y = lerp(old_pos.y, current_pos.y, smoothness);
-			SDL_RenderLine(ctx->renderer,
-				old_pos.x,
-				old_pos.y,
-				current_pos.x,
-				current_pos.y
-				);
-		}
-		old_pos = current_pos;
-#else
-		SDL_RenderRect(ctx->renderer, &(SDL_FRect){
+	for (size_t i = 0; i < FFT_BARS; ++i) {
+		Uint32 start = i * (FFT_SIZE / 2) / FFT_BARS;
+		Uint32 end = (i + 1) * (FFT_SIZE / 2) / FFT_BARS;
+		float sum = sum_arr(ctx->spectrum, start, end);
+		float mag = sum / (end - start) * old_bounds.h;
+		SDL_RenderFillRect(ctx->renderer, &(SDL_FRect){
 			.x = old_bounds.x + i * cell_width,
-			.y = old_bounds.y + old_bounds.h - SDL_sqrt(height),
+			.y = old_bounds.y + old_bounds.h - mag,
 			.w = cell_width,
-			.h = SDL_sqrt(height),
+			.h = mag,
 		});
-#endif
 	}
+	set_color(ctx, debug_red);
 }
 #endif
 
@@ -2048,22 +2081,35 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 		if (!ctx->sopratmat_texture) {
 			SDL_LogError(0, "Can't convert sopromat image: %s", SDL_GetError());
 		} else {
-			SDL_AudioSpec spec;
-			if (!SDL_LoadWAV("./trick_disco.wav", &spec, &ctx->sopratmat_audio_buf, &ctx->sopratmat_audio_buf_len)) {
+			SDL_AudioSpec spec, wav_spec;
+			Uint8 *wav_buf;
+			Uint32 wav_len;
+			if (!SDL_LoadWAV("./trick_disco.wav", &spec, &wav_buf, &wav_len)) {
 				SDL_LogError(0, "Can't load sopromat audiofile: %s", SDL_GetError());
 			} else {
+				wav_spec = spec;
+				spec.format = SDL_AUDIO_F32;
+				spec.channels = 1;
 				SDL_AudioStream *sopratmat_audiostream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, sopratmat_callback, (void *)ctx);
 				if (!sopratmat_audiostream) {
 					SDL_LogError(0, "Can't open audio output: %s", SDL_GetError());
 				} else {
-					SDL_AudioDeviceID audio_device = SDL_GetAudioStreamDevice(sopratmat_audiostream);
-					if (audio_device == 0) {
-						SDL_LogError(0, "Can't get audio stream device: %s", SDL_GetError());
+					int len_int;
+					if (!SDL_ConvertAudioSamples(&wav_spec, wav_buf, wav_len, &spec, &ctx->sopratmat_audio_buf, &len_int)) {
+						SDL_LogError(0, "Can't convert audio samples: %s", SDL_GetError());
 					} else {
-						if (!SDL_ResumeAudioDevice(audio_device)) {
-							SDL_LogError(0, "Can't resume audio: %s", SDL_GetError());
+						SDL_free(wav_buf);
+						ctx->sopratmat_audio_buf_len = len_int;
+						SDL_AudioDeviceID audio_device = SDL_GetAudioStreamDevice(sopratmat_audiostream);
+						if (audio_device == 0) {
+							SDL_LogError(0, "Can't get audio stream device: %s", SDL_GetError());
 						} else {
-							ctx->sopratmat_enabled = true;
+							if (!SDL_ResumeAudioDevice(audio_device)) {
+								SDL_LogError(0, "Can't resume audio: %s", SDL_GetError());
+							} else {
+								SDL_LogInfo(0, "Sopratmat activated");
+								ctx->sopratmat_enabled = true;
+							}
 						}
 					}
 				}
