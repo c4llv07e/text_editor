@@ -242,35 +242,21 @@ static inline SDL_Color hsv_to_rgb(SDL_Color hsv) {
 	return rgb;
 }
 
-static inline FComplex c_add(FComplex a, FComplex b) {
-	return (FComplex){a.x + b.x, a.y + b.y};
-}
-
-static inline FComplex c_sub(FComplex a, FComplex b) {
-	return (FComplex){a.x - b.x, a.y - b.y};
-}
-
-static inline FComplex c_mul(FComplex a, FComplex b) {
-	return (FComplex){
-		a.x * b.x - a.y * b.y,
-		a.x * b.y + a.y * b.x
-	};
-}
-
-static inline FComplex c_exp(float theta) {
-	return (FComplex){SDL_cosf(theta), SDL_sinf(theta)};
-}
-
 static void fft(size_t buffer_size, FComplex buffer[buffer_size], Uint32 step) {
 	if (step >= buffer_size) return;
 	fft(buffer_size, buffer, step * 2);
 	fft(buffer_size, buffer + step, step * 2);
 	for (size_t k = 0; k < buffer_size; k += 2 * step) {
 		float a = -2.0f * SDL_PI_F * k * buffer_size;
-		FComplex t = c_mul((FComplex){SDL_cosf(a), SDL_sinf(a)}, buffer[k + step]);
+		float ca = SDL_cosf(a);
+		float sa = SDL_sinf(a);
+		FComplex t = (FComplex){
+			ca * buffer[k + step].x - sa * buffer[k + step].y,
+			ca * buffer[k + step].y + sa * buffer[k + step].x,
+		};
 		FComplex u = buffer[k];
-		buffer[k] = c_add(u, t);
-		buffer[k + step] = c_sub(u, t);
+		buffer[k] = (FComplex){u.x + t.x, u.y + t.y};
+		buffer[k + step] = (FComplex){u.x - t.x, u.y - t.y};
 	}
 }
 
@@ -1176,20 +1162,24 @@ static void render_cool(Ctx *ctx) {
 	bounds.x = ctx->win_w - bounds.w - SOPRATMAT_MARGIN;
 	bounds.y = bounds.h / 2 + SOPRATMAT_MARGIN;
 	float value = SDL_sqrt(sum_arr(ctx->spectrum, 0, (FFT_SIZE / 2))) / 6;
-	float scale_value = SDL_logf(SDL_fabs(value / 3.0 - 1.0f)/5.0f + 1.5f) + 0.5f;
-	ctx->current_scale_val = lerp(ctx->current_scale_val, scale_value, 0.7f);
-	SDL_SetRenderScale(ctx->renderer, ctx->current_scale_val, ctx->current_scale_val);
+	float scale_scaler = 10.0f;
+	float scale_value = SDL_logf(value + 1) / scale_scaler + 0.93f;
+	/* float scale_value = scale_scaler / (SDL_expf(value) * value + scale_scaler); */
+	/* float scale_value = scale_scaler / (value + scale_scaler); */
+	/* float scale_value = SDL_logf(SDL_fabs(value / 1.0 - 1.0f)/5.0f + 1.5f) + 0.5f; */
 	SDL_FRect old_bounds = bounds;
 	bounds.x -= bounds.w * ctx->old_sopratmat_size / 2;
 	bounds.y -= bounds.h * ctx->old_sopratmat_size / 2;
 	bounds.w *= ctx->old_sopratmat_size;
 	bounds.h *= ctx->old_sopratmat_size;
 	ctx->old_sopratmat_size = lerp(ctx->old_sopratmat_size, value, 0.5);
+	SDL_SetRenderScale(ctx->renderer, 1.0f, 1.0f);
 	SDL_RenderTextureRotated(ctx->renderer, ctx->sopratmat_texture, NULL, &bounds, ctx->last_render / 25000000.0, NULL, SDL_FLIP_NONE);
 	float sample_rate = ctx->sopratmat_freq;
 	float min_freq = 20.0f;
 	float max_freq = sample_rate / 2.0f;
 	set_color(ctx, debug_red);
+	SDL_FPoint current_pos, old_pos;
 	for (size_t i = 0; i < FFT_BARS; ++i) {
 #if 1
 		float gamma = 0.6;
@@ -1204,7 +1194,7 @@ static void render_cool(Ctx *ctx) {
 #endif
 		float sum = sum_arr(ctx->spectrum, start, end);
 		float mag = sum / (end - start) * old_bounds.h * 2.5f;
-/* Circle = 0 */ #if 0
+#if 0 /* Circle = 0 */
 		float cell_width = old_bounds.w*2/FFT_BARS;
 		SDL_RenderFillRect(ctx->renderer, &(SDL_FRect){
 			.x = old_bounds.x + i * cell_width - old_bounds.w * 1,
@@ -1215,6 +1205,7 @@ static void render_cool(Ctx *ctx) {
 #else
 		mag *= 3;
 		float rot = 2 * SDL_PI_F * i / FFT_BARS;
+#if 1 /* Lines from center = 1 / Lines from old to new pos = 0 */
 		set_color(ctx, hsv_to_rgb((SDL_Color){mag * 0.4, 255, 255, SDL_ALPHA_OPAQUE}));
 		SDL_RenderLine(ctx->renderer,
 			bounds.x + bounds.w / 2 + SDL_cosf(rot) * max_hw,
@@ -1222,8 +1213,27 @@ static void render_cool(Ctx *ctx) {
 			bounds.x + bounds.w / 2 + SDL_cosf(rot) * (max_hw + mag),
 			bounds.y + bounds.h / 2 + SDL_sinf(rot) * (max_hw + mag)
 		);
+#else
+		current_pos.x = bounds.x + bounds.w / 2 + SDL_cosf(rot) * (max_hw + mag);
+		current_pos.y = bounds.y + bounds.h / 2 + SDL_sinf(rot) * (max_hw + mag);
+		if (i != 0) {
+			float smooth = 1.0;
+			current_pos.x = lerp(old_pos.x, current_pos.x, smooth);
+			current_pos.y = lerp(old_pos.y, current_pos.y, smooth);
+			SDL_RenderLine(ctx->renderer,
+				old_pos.x, old_pos.y,
+				current_pos.x, current_pos.y
+			);
+		}
+		old_pos = current_pos;
+#endif
 #endif
 	}
+	float old_scale_val = ctx->current_scale_val;
+	ctx->current_scale_val = lerp(ctx->current_scale_val, scale_value, 0.9f);
+	ctx->transform.x += ((ctx->win_w * old_scale_val / 2) - (ctx->win_w * (ctx->current_scale_val) / 2));
+	ctx->transform.y += ((ctx->win_h * old_scale_val / 2) - (ctx->win_h * (ctx->current_scale_val) / 2));
+	SDL_SetRenderScale(ctx->renderer, ctx->current_scale_val, ctx->current_scale_val);
 }
 #endif
 
@@ -1278,26 +1288,28 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	Uint32 lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, draw_frame->buffer->text, number);
 	set_color(ctx, line_number_dimmed_color);
 	SDL_RenderFillRect(ctx->renderer, &(SDL_FRect){
-		.x = 400,
-		.y = 200,
+		.x = ctx->transform.x + 400,
+		.y = ctx->transform.y + 200,
 		.w = ctx->font_width * 25,
 		.h = ctx->line_height * 4,
 	});
-	draw_text_fmt(ctx, 400, 200 + ctx->line_height * 0, debug_purple, "number = %u", number);
-	draw_text_fmt(ctx, 400, 200 + ctx->line_height * 1, debug_purple, "start.y = %.02f", start.y);
-	draw_text_fmt(ctx, 400, 200 + ctx->line_height * 2, debug_purple, "scroll_interp.y = %.02f", draw_frame->scroll_interp.y);
-	draw_text_fmt(ctx, 400, 200 + ctx->line_height * 3, debug_purple, "s/lh = %.02f", (-draw_frame->scroll_interp.y / ctx->line_height));
+	draw_text_fmt(ctx, ctx->transform.x + 400, ctx->transform.y + 200 + ctx->line_height * 0, debug_purple, "number = %u", number);
+	draw_text_fmt(ctx, ctx->transform.x + 400, ctx->transform.y + 200 + ctx->line_height * 1, debug_purple, "start.y = %.02f", start.y);
+	draw_text_fmt(ctx, ctx->transform.x + 400, ctx->transform.y + 200 + ctx->line_height * 2, debug_purple, "scroll_interp.y = %.02f", draw_frame->scroll_interp.y);
+	draw_text_fmt(ctx, ctx->transform.x + 400, ctx->transform.y + 200 + ctx->line_height * 3, debug_purple, "s/lh = %.02f", (-draw_frame->scroll_interp.y / ctx->line_height));
 	Uint32 linenum = 0;
 	for (;;) {
 		String *line = NULL;
 		if (lines_count > linenum) line = lines + linenum;
 		draw_text_fmt(ctx, start.x, start.y, line_number_color, "%d", number);
 		if (line && line->size > 0) {
-			draw_text(ctx, start.x + ctx->font_width * 4, start.y, text_color, line->size, line->text);
+			start.x += ctx->font_width * 4;
+			render_line(ctx, bounds, &start, line->size, line->text);
+		} else {
+			start.y += ctx->line_height;
 		}
 		number += 1;
 		linenum += 1;
-		start.y += ctx->line_height;
 		if (start.y > bounds.y + bounds.h) break;
 	}
 }
@@ -2109,6 +2121,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 #ifdef COOL
 	SDL_Surface *sopratmat_surface;
 	ctx->old_sopratmat_size = 1;
+	ctx->current_scale_val = 1.0f;
 	sopratmat_surface = SDL_LoadSurface("./sopratmat.png");
 	if (sopratmat_surface) {
 		ctx->sopratmat_texture = SDL_CreateTextureFromSurface(ctx->renderer, sopratmat_surface);
