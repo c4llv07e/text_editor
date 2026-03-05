@@ -193,7 +193,7 @@ typedef struct Ctx {
 #endif
 } Ctx;
 
-static const SDL_Color text_color = {0xe6, 0xe6, 0xe6, SDL_ALPHA_OPAQUE};
+static SDL_Color text_color = {0xe6, 0xe6, 0xe6, SDL_ALPHA_OPAQUE};
 static const SDL_Color prefix_color = {0x86, 0xf6, 0x86, SDL_ALPHA_OPAQUE};
 static const SDL_Color selection_rect_color = {0xe6 / 3, 0xe6 / 2, 0xe6 / 3, SDL_ALPHA_OPAQUE};
 static const SDL_Color selection_color = {0xe6 / 3 / 2, 0xe6 / 2 / 2, 0xe6 / 3 / 2, SDL_ALPHA_OPAQUE / 2};
@@ -242,6 +242,7 @@ static inline SDL_Color hsv_to_rgb(SDL_Color hsv) {
 	return rgb;
 }
 
+#ifdef COOL
 static void fft(size_t buffer_size, FComplex buffer[buffer_size], Uint32 step) {
 	if (step >= buffer_size) return;
 	fft(buffer_size, buffer, step * 2);
@@ -259,6 +260,7 @@ static void fft(size_t buffer_size, FComplex buffer[buffer_size], Uint32 step) {
 		buffer[k + step] = (FComplex){u.x - t.x, u.y - t.y};
 	}
 }
+#endif
 
 static inline float sum_arr(float arr[], Uint32 start, Uint32 end) {
 	float sum = 0.0f;
@@ -1065,6 +1067,37 @@ static Uint32 split_into_vis_lines(Ctx *ctx, SDL_FRect bounds, String line, Uint
 	return linenum;
 }
 
+static Uint32 count_vislines(Ctx *ctx, SDL_FRect bounds, String line, float max_height) {
+	// TODO(c4llv07e): Make it use TTF_MeasureString
+	if (line.text == NULL || line.size <= 0) {
+		return 0;
+	}
+	char *text = line.text;
+	size_t size = line.size;
+	float cur_line_width = 0;
+	float cur_height = 0;
+	Uint32 linenum = 1;
+	while (true) {
+		if ((max_height > 0) && (cur_height > max_height)) {
+			break;
+		}
+		Uint32 cp = SDL_StepUTF8((const char **)&text, &size);
+		if (cp == 0) break;
+		if (cp == '\t') {
+			cur_line_width += TAB_WIDTH * ctx->font_width;
+		} else {
+			cur_line_width += ctx->font_width;
+		}
+		if (cur_line_width >= bounds.w || cp == '\n') {
+			if (size <= 0) break;
+			cur_height += ctx->line_height;
+			linenum += 1;
+			cur_line_width = 0;
+		}
+	}
+	return linenum;
+}
+
 static void render_line(Ctx *ctx, SDL_FRect bounds, SDL_FPoint *start, size_t text_size, const char text[text_size]) {
 	size_t accum = 0;
 	if (text_size == 0) {
@@ -1162,6 +1195,7 @@ static void render_cool(Ctx *ctx) {
 	bounds.x = ctx->win_w - bounds.w - SOPRATMAT_MARGIN;
 	bounds.y = bounds.h / 2 + SOPRATMAT_MARGIN;
 	float value = SDL_sqrt(sum_arr(ctx->spectrum, 0, (FFT_SIZE / 2))) / 6;
+	text_color = hsv_to_rgb((SDL_Color){ctx->last_render / 25000000.0 + SDL_expf(3 * value), 255, 255, SDL_ALPHA_OPAQUE});
 	float scale_scaler = 10.0f;
 	float scale_value = SDL_logf(value + 1) / scale_scaler + 0.93f;
 	/* float scale_value = scale_scaler / (SDL_expf(value) * value + scale_scaler); */
@@ -1247,7 +1281,10 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		bounds.x += ctx->transform.x;
 		bounds.y += ctx->transform.y;
 	}
-	SDL_assert(SDL_arraysize(lines) >= (bounds.h / ctx->line_height));
+	SDL_FRect lines_bounds = bounds;
+	lines_bounds.x += 4 * ctx->font_width;
+	lines_bounds.w -= 4 * ctx->font_width;
+	SDL_assert(SDL_arraysize(lines) >= (lines_bounds.h / ctx->line_height));
 	if (draw_frame->frame_type == Frame_Type_search) {
 		if (draw_frame->search_status == Search_Status_not_found) {
 			set_color(ctx, background_color_error);
@@ -1276,16 +1313,27 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		set_color(ctx, debug_blue);
 	}
 	SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
-		.x = bounds.x + draw_frame->scroll_interp.x,
-		.y = bounds.y + draw_frame->scroll_interp.y,
-		.w = bounds.w,
-		.h = bounds.h,
+		.x = lines_bounds.x + draw_frame->scroll_interp.x,
+		.y = lines_bounds.y + draw_frame->scroll_interp.y,
+		.w = lines_bounds.w,
+		.h = lines_bounds.h,
 	});
 	Sint32 number = 0;
-	if (draw_frame->scroll_interp.y < 0)
-		number = SDL_floor((-draw_frame->scroll_interp.y / ctx->line_height));
-	SDL_FPoint start = {bounds.x + draw_frame->scroll_interp.x, bounds.y + SDL_fmod(draw_frame->scroll_interp.y, ctx->line_height)};
+	if (draw_frame->scroll_interp.y < 0) {
+		String visline = get_vis_line(ctx, lines_bounds, draw_frame->buffer->text_size, draw_frame->buffer->text, SDL_floor(-draw_frame->scroll_interp.y / ctx->line_height));
+		SDL_Log("vl: [%lu]|%.*s|", visline.size, (int)visline.size, visline.text);
+		if (visline.text != NULL) {
+			Uint32 size = visline.text - draw_frame->buffer->text;
+			if (size > 0) size -= 1;
+			number = count_lines(ctx, size, draw_frame->buffer->text);
+		} else {
+			number = count_lines(ctx, draw_frame->buffer->text_size, draw_frame->buffer->text);
+		}
+	}
 	Uint32 lines_count = split_into_lines(ctx, SDL_arraysize(lines), lines, draw_frame->buffer->text, number);
+	SDL_FPoint start = {lines_bounds.x + draw_frame->scroll_interp.x, lines_bounds.y + draw_frame->scroll_interp.y + ctx->line_height * number};
+	if (draw_frame->scroll_interp.y > 0)
+		start.y = lines_bounds.y + draw_frame->scroll_interp.y;
 	set_color(ctx, line_number_dimmed_color);
 	SDL_RenderFillRect(ctx->renderer, &(SDL_FRect){
 		.x = ctx->transform.x + 400,
@@ -1299,18 +1347,21 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	draw_text_fmt(ctx, ctx->transform.x + 400, ctx->transform.y + 200 + ctx->line_height * 3, debug_purple, "s/lh = %.02f", (-draw_frame->scroll_interp.y / ctx->line_height));
 	Uint32 linenum = 0;
 	for (;;) {
+		if (start.y > lines_bounds.y + lines_bounds.h) break;
 		String *line = NULL;
 		if (lines_count > linenum) line = lines + linenum;
-		draw_text_fmt(ctx, start.x, start.y, line_number_color, "%d", number);
+		draw_text_fmt(ctx, start.x - (lines_bounds.x - bounds.x), start.y, line_number_color, "%d", number);
 		if (line && line->size > 0) {
-			start.x += ctx->font_width * 4;
-			render_line(ctx, bounds, &start, line->size, line->text);
+			Uint32 vislines_count = split_into_vis_lines(ctx, lines_bounds, *line, SDL_arraysize(vislines), vislines);
+			for (Uint32 vislinenum = 0; vislinenum < vislines_count; ++vislinenum) {
+				String *visline = &vislines[vislinenum];
+				render_line(ctx, lines_bounds, &start, visline->size, visline->text);
+			}
 		} else {
 			start.y += ctx->line_height;
 		}
 		number += 1;
 		linenum += 1;
-		if (start.y > bounds.y + bounds.h) break;
 	}
 }
 
