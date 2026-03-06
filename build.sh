@@ -17,14 +17,17 @@ DEBUG_ARGS="${DEBUG_ARGS} -DDEBUG_SCROLL_ONELINE=ON"
 # DEBUG_ARGS="${DEBUG_ARGS} -DDEBUG_BUFFERS=ON"
 # DEBUG_ARGS="${DEBUG_ARGS} -DDEBUG_QUIT=ON"
 # DEBUG_ARGS="${DEBUG_ARGS} -DDEBUG_UNDO=ON"
-# DEBUG_ARGS="${DEBUG_ARGS} -DCOOL=ON"
+DEBUG_ARGS="${DEBUG_ARGS} -DCOOL=ON"
 ADDITIONAL_FILES=""
 old_pwd=${PWD}
 (cd /usr/share/fonts/TTF/liberation/;
  ld -r -b binary -o "${old_pwd}/liberation_mono.o" LiberationMono-Regular.ttf)
-ADDITIONAL_FILES="${ADDITIONAL_FILES} liberation_mono.o"
+ld -r -b binary -o "trick_disco.o" trick_disco.wav
+ld -r -b binary -o "sopratmat.o" sopratmat.png
+ADDITIONAL_FILES="${ADDITIONAL_FILES} liberation_mono.o trick_disco.o sopratmat.o"
 DEBUG_ARGS="${DEBUG_ARGS} -DDEBUG_GDB=ON"
 ARGS="-Wall -Wextra -pedantic -fpic -lSDL3_ttf -lSDL3 -Wno-missing-braces"
 ARGS="${DEBUG_ARGS} ${ARGS}"
+# ARGS="${ARGS} -static $(pkg-config --libs --static sdl3 sdl3-ttf)"
 ARGS="${ARGS} -DDISABLE_LOG_BUFFER=ON"
 gcc -o editor editor.c ${ADDITIONAL_FILES} ${ARGS} "${@}"

@@ -40,9 +40,29 @@ DEFINE_GDB_SCRIPT("gdb.py")
 #define SCROLL_LINES_TICK 3
 #endif
 
+#ifndef __x86_64__
+#define _binary_LiberationMono_Regular_ttf_end binary_LiberationMono_Regular_ttf_end
+#define _binary_LiberationMono_Regular_ttf_size binary_LiberationMono_Regular_ttf_size
+#define _binary_LiberationMono_Regular_ttf_start binary_LiberationMono_Regular_ttf_start
+#define _binary_sopratmat_png_end binary_sopratmat_png_end
+#define _binary_sopratmat_png_size binary_sopratmat_png_size
+#define _binary_sopratmat_png_start binary_sopratmat_png_start
+#define _binary_trick_disco_wav_end binary_trick_disco_wav_end
+#define _binary_trick_disco_wav_size binary_trick_disco_wav_size
+#define _binary_trick_disco_wav_start binary_trick_disco_wav_start
+#endif
+
 extern char _binary_LiberationMono_Regular_ttf_end[];
 extern char _binary_LiberationMono_Regular_ttf_size;
 extern char _binary_LiberationMono_Regular_ttf_start[];
+
+extern char _binary_sopratmat_png_end[];
+extern char _binary_sopratmat_png_size;
+extern char _binary_sopratmat_png_start[];
+
+extern char _binary_trick_disco_wav_end[];
+extern char _binary_trick_disco_wav_size;
+extern char _binary_trick_disco_wav_start[];
 
 #define TEXT_CHUNK_SIZE 256
 #define TAB_WIDTH 8
@@ -1215,20 +1235,23 @@ static void render_cool(Ctx *ctx) {
 	set_color(ctx, debug_red);
 	SDL_FPoint current_pos, old_pos;
 	for (size_t i = 0; i < FFT_BARS; ++i) {
-#if 1
+#if 0
 		float gamma = 0.6;
 		float f1 = min_freq * SDL_powf(max_freq/min_freq, SDL_powf((float)i / FFT_BARS, gamma));
 		float f2 = min_freq * SDL_powf(max_freq/min_freq, SDL_powf((float)(i+1) / FFT_BARS, gamma));
 		float start = (int)(f1 * FFT_SIZE / sample_rate);
 		float end = SDL_clamp((int)(f2 * FFT_SIZE / sample_rate), start + 1, FFT_SIZE / 2);
-#else
+#elif 0
 		float rate = 3.0f;
 		float start = SDL_powf((float)i / FFT_BARS, rate) * (FFT_SIZE / 2);
 		float end = SDL_min(start + 1, SDL_powf((float)(i + 1) / FFT_BARS, rate) * (FFT_SIZE / 2));
+#else
+		float start = i;
+		float end = i + 1;
 #endif
 		float sum = sum_arr(ctx->spectrum, start, end);
 		float mag = sum / (end - start) * old_bounds.h * 2.5f;
-#if 0 /* Circle = 0 */
+#if 1 /* Circle = 0 */
 		float cell_width = old_bounds.w*2/FFT_BARS;
 		SDL_RenderFillRect(ctx->renderer, &(SDL_FRect){
 			.x = old_bounds.x + i * cell_width - old_bounds.w * 1,
@@ -1271,7 +1294,7 @@ static void render_cool(Ctx *ctx) {
 }
 #endif
 
-static void render_frame(Ctx *ctx, Uint32 frame) {
+static void render_frame_new(Ctx *ctx, Uint32 frame) {
 	String lines[0x100];
 	String vislines[0x10] = {0};
 	(void) vislines;
@@ -1312,16 +1335,17 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 		ctx->frames[frame].scroll_interp.y = ctx->frames[frame].scroll.y;
 		set_color(ctx, debug_blue);
 	}
+#if 0
 	SDL_RenderRect(ctx->renderer, &(SDL_FRect) {
 		.x = lines_bounds.x + draw_frame->scroll_interp.x,
 		.y = lines_bounds.y + draw_frame->scroll_interp.y,
 		.w = lines_bounds.w,
 		.h = lines_bounds.h,
 	});
+#endif
 	Sint32 number = 0;
 	if (draw_frame->scroll_interp.y < 0) {
 		String visline = get_vis_line(ctx, lines_bounds, draw_frame->buffer->text_size, draw_frame->buffer->text, SDL_floor(-draw_frame->scroll_interp.y / ctx->line_height));
-		SDL_Log("vl: [%lu]|%.*s|", visline.size, (int)visline.size, visline.text);
 		if (visline.text != NULL) {
 			Uint32 size = visline.text - draw_frame->buffer->text;
 			if (size > 0) size -= 1;
@@ -1334,6 +1358,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	SDL_FPoint start = {lines_bounds.x + draw_frame->scroll_interp.x, lines_bounds.y + draw_frame->scroll_interp.y + ctx->line_height * number};
 	if (draw_frame->scroll_interp.y > 0)
 		start.y = lines_bounds.y + draw_frame->scroll_interp.y;
+#if 0
 	set_color(ctx, line_number_dimmed_color);
 	SDL_RenderFillRect(ctx->renderer, &(SDL_FRect){
 		.x = ctx->transform.x + 400,
@@ -1345,6 +1370,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	draw_text_fmt(ctx, ctx->transform.x + 400, ctx->transform.y + 200 + ctx->line_height * 1, debug_purple, "start.y = %.02f", start.y);
 	draw_text_fmt(ctx, ctx->transform.x + 400, ctx->transform.y + 200 + ctx->line_height * 2, debug_purple, "scroll_interp.y = %.02f", draw_frame->scroll_interp.y);
 	draw_text_fmt(ctx, ctx->transform.x + 400, ctx->transform.y + 200 + ctx->line_height * 3, debug_purple, "s/lh = %.02f", (-draw_frame->scroll_interp.y / ctx->line_height));
+#endif
 	Uint32 linenum = 0;
 	for (;;) {
 		if (start.y > lines_bounds.y + lines_bounds.h) break;
@@ -1365,7 +1391,7 @@ static void render_frame(Ctx *ctx, Uint32 frame) {
 	}
 }
 
-static void render_frame_old(Ctx *ctx, Uint32 frame) {
+static void render_frame(Ctx *ctx, Uint32 frame) {
 	String lines[0x100];
 	String vislines[0x10] = {0};
 	Frame *draw_frame = &ctx->frames[frame];
@@ -2153,7 +2179,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	}
 #endif
 	Uint64 window_flags = SDL_WINDOW_RESIZABLE;
-	if (!SDL_CreateWindowAndRenderer("editor", ctx->win_w, ctx->win_h, window_flags, &ctx->window, &ctx->renderer)) {
+	if (!SDL_CreateWindowAndRenderer("alvunyetiw", ctx->win_w, ctx->win_h, window_flags, &ctx->window, &ctx->renderer)) {
 		SDL_Log("Error, can't init renderer: %s", SDL_GetError());
 		return SDL_APP_FAILURE;
 	}
@@ -2173,7 +2199,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 	SDL_Surface *sopratmat_surface;
 	ctx->old_sopratmat_size = 1;
 	ctx->current_scale_val = 1.0f;
-	sopratmat_surface = SDL_LoadSurface("./sopratmat.png");
+	sopratmat_surface = SDL_LoadSurface_IO(SDL_IOFromConstMem(_binary_sopratmat_png_start, (size_t)&_binary_sopratmat_png_size), true);
 	if (sopratmat_surface) {
 		ctx->sopratmat_texture = SDL_CreateTextureFromSurface(ctx->renderer, sopratmat_surface);
 		if (!ctx->sopratmat_texture) {
@@ -2182,7 +2208,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 			SDL_AudioSpec spec, wav_spec;
 			Uint8 *wav_buf;
 			Uint32 wav_len;
-			if (!SDL_LoadWAV("./trick_disco.wav", &spec, &wav_buf, &wav_len)) {
+			if (!SDL_LoadWAV_IO(SDL_IOFromConstMem(_binary_trick_disco_wav_start, (size_t)&_binary_trick_disco_wav_size), true, &spec, &wav_buf, &wav_len)) {
 				SDL_LogError(0, "Can't load sopromat audiofile: %s", SDL_GetError());
 			} else {
 				wav_spec = spec;
